@@ -1,0 +1,22 @@
+{
+  "name": "夜航 · 睡眠记录",
+  "short_name": "夜航",
+  "description": "轻监测睡眠 App：助眠音景 + 入睡自动停 + 免穿戴体动记录 + 早报 + 每晚一个动作的干预闭环。",
+  "lang": "zh-CN",
+  "dir": "ltr",
+  "id": "./mvp.html",
+  "start_url": "./mvp.html",
+  "scope": "./",
+  "display": "standalone",
+  "display_override": ["standalone", "fullscreen"],
+  "orientation": "portrait",
+  "background_color": "#05070f",
+  "theme_color": "#0a0d1c",
+  "categories": ["health", "lifestyle", "medical"],
+  "prefer_related_applications": false,
+  "icons": [
+    { "src": "./icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "./icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "./icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

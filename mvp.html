@@ -1,0 +1,946 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>夜航 · MVP 测试版</title>
+<link rel="manifest" href="./manifest.webmanifest">
+<meta name="theme-color" content="#0a0d1c">
+<meta name="description" content="夜航：轻监测睡眠 App。助眠音景 + 入睡自动停 + 免穿戴体动记录 + 早报 + 干预闭环。">
+<link rel="icon" type="image/png" href="./favicon-64.png">
+<link rel="apple-touch-icon" href="./apple-touch-icon.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="夜航">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { height: 100%; overflow: hidden; font-family: -apple-system, "PingFang SC", "Helvetica Neue", sans-serif; }
+  body { background: radial-gradient(1200px 600px at 50% -10%, #1b2450 0%, #0a0d1c 55%, #05070f 100%); }
+
+  .stage { display: flex; align-items: center; justify-content: center; height: 100vh; gap: 40px; padding: 20px; }
+
+  /* ============ 手机外壳 ============ */
+  .phone { width: 390px; height: 844px; background: #06080f; border-radius: 52px; padding: 11px;
+    box-shadow: 0 40px 90px rgba(0,0,0,.65), 0 0 0 2px #232a44 inset; flex-shrink: 0; position: relative; }
+  .phone-screen { width: 100%; height: 100%; border-radius: 42px; overflow: hidden; position: relative;
+    background: linear-gradient(180deg, #101733 0%, #0b1024 45%, #080b18 100%); color: #e9edfa; }
+  .notch { position: absolute; top: 22px; left: 50%; transform: translateX(-50%); width: 116px; height: 30px;
+    background: #06080f; border-radius: 18px; z-index: 300; }
+
+  /* ============ 状态栏 ============ */
+  .statusbar { position: absolute; top: 0; left: 0; right: 0; height: 58px; z-index: 200;
+    display: flex; align-items: flex-end; justify-content: space-between; padding: 0 26px 6px; font-size: 12px;
+    font-weight: 600; color: #cdd5ee; letter-spacing: .3px; pointer-events: none; }
+  .statusbar .right { display: flex; gap: 5px; align-items: center; font-size: 11px; opacity: .85; }
+
+  /* ============ 屏幕容器 ============ */
+  .screen { position: absolute; inset: 0; display: none; flex-direction: column; }
+  .screen.active { display: flex; animation: screenIn .32s cubic-bezier(.22,.8,.3,1); }
+  @keyframes screenIn { from { opacity: 0; transform: translateY(10px) scale(.995); } to { opacity: 1; transform: none; } }
+  .scroll { flex: 1; overflow-y: auto; overflow-x: hidden; -webkit-overflow-scrolling: touch; padding: 0 20px 24px; }
+  .scroll::-webkit-scrollbar { display: none; }
+  .pad-top { padding-top: 62px; }
+  .pad-bot { height: 92px; }
+
+  /* ============ 底部 Tab ============ */
+  .tabbar { height: 84px; padding-bottom: 20px; background: rgba(10,14,30,.86); backdrop-filter: blur(20px);
+    border-top: 1px solid rgba(255,255,255,.07); display: flex; flex-shrink: 0; }
+  .tab { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 5px;
+    font-size: 10.5px; color: #6b7695; cursor: pointer; transition: color .2s; position: relative; }
+  .tab .ico { font-size: 21px; line-height: 1; transition: transform .22s; }
+  .tab.active { color: #f3c98e; }
+  .tab.active .ico { transform: translateY(-2px) scale(1.06); }
+  .tab .dot { position: absolute; top: 20px; right: 26px; width: 7px; height: 7px; border-radius: 50%;
+    background: #ff6b6b; box-shadow: 0 0 0 2px rgba(10,14,30,.9); }
+
+  /* ============ 通用组件 ============ */
+  .h1 { font-size: 25px; font-weight: 700; letter-spacing: -.4px; }
+  .h2 { font-size: 17px; font-weight: 650; letter-spacing: -.2px; }
+  .sub { font-size: 12.5px; color: #8b95b5; line-height: 1.6; }
+  .tiny { font-size: 11px; color: #6b7695; line-height: 1.6; }
+  .muted { color: #8b95b5; }
+  .row { display: flex; align-items: center; }
+  .between { display: flex; align-items: center; justify-content: space-between; }
+  .gap8 { gap: 8px; } .gap12 { gap: 12px; } .mt8{margin-top:8px;} .mt12 { margin-top: 12px; } .mt16 { margin-top: 16px; }
+  .mt20 { margin-top: 20px; } .mt24 { margin-top: 24px; } .mt32 { margin-top: 32px; }
+
+  .card { background: rgba(255,255,255,.055); border: 1px solid rgba(255,255,255,.08); border-radius: 22px; padding: 18px;
+    backdrop-filter: blur(10px); }
+  .card.solid { background: linear-gradient(160deg, rgba(255,255,255,.09), rgba(255,255,255,.04)); }
+  .card.warm { background: linear-gradient(160deg, rgba(243,201,142,.16), rgba(243,201,142,.05));
+    border-color: rgba(243,201,142,.28); }
+
+  .btn { width: 100%; height: 52px; border: none; border-radius: 16px; font-size: 15.5px; font-weight: 650;
+    cursor: pointer; transition: transform .14s, filter .2s; font-family: inherit; }
+  .btn:active { transform: scale(.975); }
+  .btn.primary { background: linear-gradient(135deg, #f3c98e, #e0a75f); color: #2a1d08;
+    box-shadow: 0 10px 26px rgba(224,167,95,.28); }
+  .btn.ghost { background: rgba(255,255,255,.08); color: #dbe2f5; border: 1px solid rgba(255,255,255,.12); }
+  .btn.sm { height: 40px; font-size: 13.5px; border-radius: 13px; width: auto; padding: 0 18px; }
+  .btn.link { background: none; color: #8b95b5; font-weight: 500; font-size: 13px; height: auto; text-decoration: underline;
+    text-decoration-color: rgba(139,149,181,.4); text-underline-offset: 3px; }
+  .pill { display: inline-flex; align-items: center; gap: 5px; padding: 4px 10px; border-radius: 999px;
+    font-size: 11px; font-weight: 600; background: rgba(255,255,255,.08); color: #c3ccea; }
+  .pill.warm { background: rgba(243,201,142,.16); color: #f3c98e; }
+  .pill.green { background: rgba(90,220,160,.15); color: #6ee0a8; }
+  .pill.grey { background: rgba(255,255,255,.06); color: #7d87a6; }
+  .pill.red { background: rgba(255,120,120,.15); color: #ff9a9a; }
+  .divider { height: 1px; background: rgba(255,255,255,.07); margin: 16px 0; }
+  .back { position: absolute; top: 62px; left: 20px; width: 34px; height: 34px; border-radius: 12px; z-index: 150;
+    background: rgba(255,255,255,.08); display: flex; align-items: center; justify-content: center; font-size: 15px;
+    cursor: pointer; border: 1px solid rgba(255,255,255,.1); }
+  .back:active { transform: scale(.92); }
+  .notice { font-size: 11px; color: #7d87a6; line-height: 1.65; background: rgba(255,255,255,.035);
+    border-left: 2px solid rgba(243,201,142,.5); border-radius: 8px; padding: 9px 12px; }
+
+  /* ============ 今晚 ============ */
+  .hello { font-size: 12.5px; color: #8b95b5; letter-spacing: .4px; }
+  .streak { font-size: 12px; color: #f3c98e; font-weight: 600; }
+  .action-card { background: linear-gradient(155deg, rgba(243,201,142,.2), rgba(124,140,255,.1) 60%, rgba(255,255,255,.04));
+    border: 1px solid rgba(243,201,142,.3); border-radius: 26px; padding: 22px; position: relative; overflow: hidden; }
+  .action-card::after { content: ''; position: absolute; width: 190px; height: 190px; border-radius: 50%;
+    background: radial-gradient(circle, rgba(243,201,142,.28), transparent 68%); top: -80px; right: -60px; }
+  .action-label { font-size: 11px; font-weight: 700; letter-spacing: 1.4px; color: #f3c98e; opacity: .95; }
+  .action-title { font-size: 21px; font-weight: 700; line-height: 1.35; margin-top: 10px; letter-spacing: -.3px; }
+  .action-why { font-size: 12.5px; color: #cfd7ef; line-height: 1.6; margin-top: 10px; }
+  .mini-player { display: flex; align-items: center; gap: 13px; background: rgba(255,255,255,.06);
+    border: 1px solid rgba(255,255,255,.08); border-radius: 20px; padding: 13px 15px; cursor: pointer; }
+  .mini-art { width: 46px; height: 46px; border-radius: 14px; flex-shrink: 0;
+    background: conic-gradient(from 210deg, #2b3a7a, #4b3f8f, #1f2c62, #2b3a7a); display: flex; align-items: center;
+    justify-content: center; font-size: 20px; }
+  .mini-bars { display: flex; align-items: flex-end; gap: 2px; height: 16px; }
+  .mini-bars i { width: 2.5px; background: #f3c98e; border-radius: 2px; animation: eq .9s ease-in-out infinite; }
+  .mini-bars i:nth-child(1){height:6px; animation-delay:0s}
+  .mini-bars i:nth-child(2){height:14px; animation-delay:.14s}
+  .mini-bars i:nth-child(3){height:9px; animation-delay:.28s}
+  .mini-bars i:nth-child(4){height:16px; animation-delay:.42s}
+  @keyframes eq { 0%,100% { transform: scaleY(.45); } 50% { transform: scaleY(1); } }
+  .kpi3 { display: flex; gap: 10px; }
+  .kpi3 > div { flex: 1; background: rgba(255,255,255,.05); border: 1px solid rgba(255,255,255,.07);
+    border-radius: 16px; padding: 13px 12px; }
+  .kpi-num { font-size: 21px; font-weight: 700; letter-spacing: -.5px; }
+  .kpi-num span { font-size: 11px; font-weight: 500; color: #8b95b5; margin-left: 2px; letter-spacing: 0; }
+  .kpi-lb { font-size: 11px; color: #8b95b5; margin-top: 4px; }
+
+  /* ============ 播放器 ============ */
+  .player-art { width: 232px; height: 232px; border-radius: 50%; margin: 0 auto; position: relative;
+    background: radial-gradient(circle at 34% 28%, #4d5fa8 0%, #2a3670 42%, #151d43 74%, #0d1229 100%);
+    box-shadow: 0 26px 70px rgba(0,0,0,.55), inset 0 0 60px rgba(120,150,255,.15); display: flex;
+    align-items: center; justify-content: center; }
+  .player-art::before { content: ''; position: absolute; inset: -18px; border-radius: 50%;
+    border: 1px solid rgba(243,201,142,.22); animation: breathe 5.5s ease-in-out infinite; }
+  .player-art::after { content: ''; position: absolute; inset: -42px; border-radius: 50%;
+    border: 1px solid rgba(255,255,255,.07); animation: breathe 5.5s ease-in-out infinite .8s; }
+  @keyframes breathe { 0%,100% { transform: scale(.97); opacity: .5; } 50% { transform: scale(1.03); opacity: 1; } }
+  .mix-bars { display: flex; align-items: flex-end; justify-content: center; gap: 4px; height: 44px; }
+  .mix-bars i { width: 4px; border-radius: 3px; background: linear-gradient(180deg,#f3c98e,#7d8cff); animation: eq2 1.5s ease-in-out infinite; }
+  @keyframes eq2 { 0%,100% { height: 12%; opacity:.5 } 50% { height: 100%; opacity: 1 } }
+  .mixer { display: flex; flex-direction: column; gap: 14px; }
+  .mix-row .between { font-size: 12.5px; color: #c3ccea; margin-bottom: 7px; }
+  .mix-row b { font-weight: 600; font-size: 12.5px; }
+  .track { height: 5px; background: rgba(255,255,255,.11); border-radius: 4px; position: relative; }
+  .track .fill { position: absolute; inset: 0 auto 0 0; border-radius: 4px;
+    background: linear-gradient(90deg,#f3c98e,#ffd9a5); }
+  .autostop { border-radius: 18px; padding: 15px; background: rgba(124,140,255,.13);
+    border: 1px solid rgba(124,140,255,.25); }
+  .autostop .st { font-size: 13px; font-weight: 650; color: #c9d2ff; }
+
+  /* ============ 夜间记录 ============ */
+  .night { background: #05070f; }
+  .night-center { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 22px; }
+  .night-orb { width: 140px; height: 140px; border-radius: 50%; background: radial-gradient(circle at 36% 30%, #2c3a78, #0f1633 70%);
+    display: flex; align-items: center; justify-content: center; font-size: 34px; position: relative;
+    box-shadow: 0 0 90px rgba(124,140,255,.22); }
+  .night-orb::before { content:''; position: absolute; inset:-14px; border-radius:50%; border:1px solid rgba(124,140,255,.3);
+    animation: breathe 4s ease-in-out infinite; }
+
+  /* ============ 早报 ============ */
+  .hero { text-align: center; padding: 8px 0 6px; }
+  .hero .big { font-size: 46px; font-weight: 700; letter-spacing: -2px; line-height: 1.05;
+    background: linear-gradient(135deg,#fff 20%, #f3c98e 90%); -webkit-background-clip: text; background-clip: text;
+    -webkit-text-fill-color: transparent; }
+  .hypno { height: 104px; position: relative; background: rgba(255,255,255,.03); border-radius: 14px; overflow: hidden; }
+  .hypno .seg { position: absolute; height: 15px; border-radius: 4px; }
+  .hypno .seg.wake { background: #f0a4a4; } .hypno .seg.light { background: #8f9dd6; } .hypno .seg.deep { background: #5566c9; }
+  .legend { display: flex; gap: 14px; font-size: 10.5px; color: #8b95b5; margin-top: 9px; }
+  .legend i { display: inline-block; width: 9px; height: 9px; border-radius: 3px; margin-right: 4px; vertical-align: -1px; }
+  .event { display: flex; align-items: center; gap: 12px; padding: 12px 0; }
+  .event + .event { border-top: 1px solid rgba(255,255,255,.06); }
+  .ev-ico { width: 36px; height: 36px; border-radius: 12px; background: rgba(255,255,255,.07); display: flex;
+    align-items: center; justify-content: center; font-size: 16px; flex-shrink: 0; }
+  .ev-play { margin-left: auto; font-size: 11px; color: #f3c98e; border: 1px solid rgba(243,201,142,.35);
+    border-radius: 10px; padding: 5px 10px; cursor: pointer; flex-shrink: 0; font-weight: 600; }
+  .compare { display: flex; gap: 10px; margin-top: 14px; }
+  .cmp { flex: 1; background: rgba(255,255,255,.05); border-radius: 15px; padding: 13px; border: 1px solid rgba(255,255,255,.07); }
+  .cmp .t { font-size: 10.5px; color: #8b95b5; }
+  .cmp .v { font-size: 19px; font-weight: 700; margin-top: 6px; }
+  .cmp .d { font-size: 11px; margin-top: 4px; }
+  .up { color: #6ee0a8; } .down { color: #ff9a9a; } .flat { color: #8b95b5; }
+
+  /* ============ 趋势 ============ */
+  .bars7 { display: flex; align-items: flex-end; justify-content: space-between; gap: 8px; height: 128px; position: relative; }
+  .bars7 .goal { position: absolute; left: 0; right: 0; border-top: 1px dashed rgba(243,201,142,.4); }
+  .bars7 .goal span { position: absolute; right: 0; top: -15px; font-size: 9.5px; color: #f3c98e; }
+  .bcol { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: flex-end; gap: 6px; height: 100%; }
+  .bcol .bar { width: 100%; border-radius: 8px 8px 4px 4px; background: linear-gradient(180deg,#7d8cff,#4a58a8); min-height: 4px; }
+  .bcol.best .bar { background: linear-gradient(180deg,#f3c98e,#d19a4d); }
+  .bcol .lb { font-size: 10px; color: #6b7695; }
+  .playlist .item { display: flex; align-items: center; gap: 11px; padding: 11px 0; }
+  .playlist .item + .item { border-top: 1px solid rgba(255,255,255,.06); }
+  .item-badge { width: 26px; height: 26px; border-radius: 9px; display: flex; align-items: center; justify-content: center;
+    font-size: 13px; flex-shrink: 0; }
+
+  /* ============ 弹层 ============ */
+  .sheet-mask { position: absolute; inset: 0; background: rgba(3,5,12,.72); backdrop-filter: blur(6px); z-index: 400;
+    display: none; align-items: flex-end; }
+  .sheet-mask.show { display: flex; animation: fadeIn .22s; }
+  @keyframes fadeIn { from { opacity: 0 } to { opacity: 1 } }
+  .sheet { width: 100%; background: linear-gradient(180deg,#182047,#101733); border-radius: 28px 28px 0 0;
+    padding: 26px 22px 30px; border-top: 1px solid rgba(255,255,255,.12); animation: sheetUp .34s cubic-bezier(.2,.8,.3,1); }
+  @keyframes sheetUp { from { transform: translateY(100%) } to { transform: none } }
+  .modal-mask { position: absolute; inset: 0; background: rgba(3,5,12,.78); backdrop-filter: blur(8px); z-index: 410;
+    display: none; align-items: center; justify-content: center; padding: 24px; }
+  .modal-mask.show { display: flex; animation: fadeIn .22s; }
+  .modal { width: 100%; background: linear-gradient(170deg,#1a2350,#0f1533); border-radius: 26px; padding: 24px;
+    border: 1px solid rgba(255,255,255,.11); max-height: 78%; overflow-y: auto; }
+  .modal::-webkit-scrollbar { display: none; }
+  .share-card { border-radius: 22px; padding: 22px; background: linear-gradient(160deg,#222c5e,#101733);
+    border: 1px solid rgba(255,255,255,.1); position: relative; overflow: hidden; }
+
+  /* ============ 侧栏说明 ============ */
+  .info-panel { width: 372px; color: #b9c2dc; font-size: 13px; line-height: 1.72; max-height: 92vh; overflow-y: auto; }
+  .info-panel::-webkit-scrollbar { width: 4px; } .info-panel::-webkit-scrollbar-thumb { background: #2a3358; border-radius: 4px; }
+  .info-panel h2 { color: #fff; font-size: 21px; margin-bottom: 6px; letter-spacing: -.3px; }
+  .info-panel .lead { color: #8b95b5; font-size: 12.5px; }
+  .info-panel h3 { color: #f3c98e; font-size: 12px; margin: 18px 0 7px; letter-spacing: 1.2px; font-weight: 700; }
+  .info-panel ul { padding-left: 16px; } .info-panel li { margin-bottom: 5px; font-size: 12.5px; }
+  .jump { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+  .jump button { flex: 0 0 auto; padding: 6px 11px; font-size: 11.5px; border-radius: 9px; cursor: pointer;
+    background: rgba(255,255,255,.07); color: #cfd7ef; border: 1px solid rgba(255,255,255,.12); font-family: inherit; }
+  .jump button:hover { background: rgba(243,201,142,.16); color: #f3c98e; border-color: rgba(243,201,142,.35); }
+  .info-panel .warn { color: #ffb4b4; }
+
+  /* ============ 已安装 / 窄屏：隐藏说明栏，App 铺满全屏 ============ */
+  @media (max-width: 860px), (display-mode: standalone), (display-mode: fullscreen) {
+    .stage { gap: 0; padding: 0; }
+    .info-panel { display: none; }
+    .phone { width: 100vw; height: 100vh; height: 100dvh; border-radius: 0; padding: 0; box-shadow: none;
+      background: transparent; }
+    .phone-screen { border-radius: 0; }
+    .notch { display: none; }
+    .statusbar { display: none; }
+    .pad-top { padding-top: calc(20px + env(safe-area-inset-top, 0px)); }
+    .pad-bot { height: calc(96px + env(safe-area-inset-bottom, 0px)); }
+    .tabbar { height: calc(84px + env(safe-area-inset-bottom, 0px)); padding-bottom: calc(20px + env(safe-area-inset-bottom, 0px)); }
+    .back { top: calc(22px + env(safe-area-inset-top, 0px)); }
+  }
+</style>
+</head>
+<body>
+<div class="stage">
+  <div class="info-panel">
+    <h2>🌙 夜航 · MVP 测试版</h2>
+    <p class="lead">定位 B（轻监测睡眠 App）｜ 手机放床头：陪你入睡 → 整夜记录 → 次日只改一件事</p>
+    <p class="lead mt8">本版只保留<b style="color:#f3c98e">验证核心假设所必需</b>的功能，目标：跑通一次完整闭环，收集你的第一手反馈。</p>
+    <h3>MVP 做什么（P0 必需）</h3>
+    <ul>
+      <li>免穿戴记录：体动 → 浅睡/深睡/清醒 + 入睡/起床时间 + 夜醒次数</li>
+      <li>助眠音景 + 自由混音，<b>入睡自动停</b>（检测入睡 → 10 分钟静默确认 → 30 秒淡出）</li>
+      <li>鼾声 / 梦话触发式短录音（仅本机）+ 事件回放</li>
+      <li>早报一屏：3 个数字 + 阶段图 + 一句人话解读</li>
+      <li><b>干预闭环</b>：每晚只推 1 个动作 → 次夜自动验证效果</li>
+      <li>趋势：7 晚柱状 + 我的动作清单（有效 / 无效 / 数据不足）</li>
+      <li>连续记录天数 + 可分享的早报卡片（不含分数与排名）</li>
+      <li>无账号可用 · 数据仅本机 · 固定"非诊断"声明</li>
+    </ul>
+
+    <h3>建议这样测（跑通一次闭环）</h3>
+    <ul>
+      <li>① 首次使用页选一个目标 → 点<b>开始今晚</b></li>
+      <li>② 播放器点 <b>模拟入睡</b> → 看"入睡自动停"如何淡出</li>
+      <li>③ 自动进入夜间记录 → 点 <b>我醒了</b></li>
+      <li>④ 早报：3 数字 → 阶段图 → 动作对比 → 鼾声回放 → 分享卡片</li>
+      <li>⑤ 底部切到 <b>趋势</b> 与 <b>我的</b>，看动作清单与隐私声明</li>
+    </ul>
+
+    <h3>重点验证 3 个假设</h3>
+    <ul>
+      <li><b>闭环成立吗</b>：每晚 1 个动作 + 次夜验证，你愿意连续做几晚？</li>
+      <li><b>减少焦虑吗</b>：不评分 / 不排名 / 不逼打卡，是否反而更放松？</li>
+      <li><b>鼾声回放有用吗</b>：你愿意点开听、并据此改变行为吗？</li>
+    </ul>
+
+    <h3>本次未包含（放后续迭代）</h3>
+    <ul>
+      <li>手机摆放校准（提升"体动 vs 噪声"区分度）</li>
+      <li>睡前 30 分钟仪式编排</li>
+      <li>睡眠天气 · 月亮盈亏 · 动作证据等级 · n-of-1 置信度块</li>
+      <li>付费与会员（整夜鼾声回放、AI 深度解读）</li>
+      <li>就医自查清单 · HealthKit · 桌面小组件 · Android</li>
+    </ul>
+
+    <h3>直接跳转</h3>
+    <div class="jump" id="jumpBox"></div>
+
+    <h3>说明</h3>
+    <p class="tiny">所有数据为演示用假数据。真实产品中：原始录音与睡眠阶段明细仅存本地、不上传。</p>
+  </div>
+
+  <div class="phone">
+    <div class="notch"></div>
+    <div class="phone-screen" id="screen">
+      <div class="statusbar"><span id="clock">23:41</span><span class="right">◗◗◗ ᯤ 87%</span></div>
+
+      <!-- ================= 0. 首次使用 ================= -->
+      <section class="screen" id="s-onboard">
+        <div class="scroll pad-top">
+          <div class="mt24" style="text-align:center">
+            <div style="font-size:52px">🌙</div>
+            <div class="h1 mt12">夜航</div>
+            <div class="sub mt8">手机放床头就能记录<br>明早告诉你"昨晚发生了什么"，和<b style="color:#f3c98e">今晚只改一件事</b></div>
+          </div>
+
+          <div class="h2 mt32">你想先改善什么？</div>
+          <div class="sub mt8">选一个最想解决的，我们只围绕它给建议</div>
+          <div class="mt16" id="obGoals">
+            <div class="card solid mt12" data-goal style="cursor:pointer">
+              <div class="between"><div><div class="h2">😵 入睡慢</div><div class="tiny mt8">躺下 30 分钟以上才能睡着</div></div><div class="pill grey">常见</div></div>
+            </div>
+            <div class="card solid mt12" data-goal style="cursor:pointer">
+              <div class="between"><div><div class="h2">🌗 夜醒多</div><div class="tiny mt8">半夜会醒，早上还是很累</div></div></div>
+            </div>
+            <div class="card solid mt12" data-goal style="cursor:pointer">
+              <div class="between"><div><div class="h2">😮‍💨 打鼾 / 憋气</div><div class="tiny mt8">自己或伴侣被打鼾困扰</div></div><div class="pill grey">可转诊</div></div>
+            </div>
+            <div class="card solid mt12" data-goal style="cursor:pointer">
+              <div class="between"><div><div class="h2">🔍 只是好奇</div><div class="tiny mt8">想知道自己睡得怎么样</div></div></div>
+            </div>
+          </div>
+
+          <div class="card mt24">
+            <div class="h2">开始前，先说清两件事</div>
+            <div class="mt12 row gap12" style="align-items:flex-start">
+              <div style="font-size:18px">🎙</div>
+              <div><div style="font-size:13px;font-weight:600">需要麦克风与运动权限</div>
+              <div class="tiny mt8">只在检测到鼾声/梦话时<b style="color:#cfd7ef">短录音</b>，不做整夜录音。</div></div>
+            </div>
+            <div class="mt16 row gap12" style="align-items:flex-start">
+              <div style="font-size:18px">📵</div>
+              <div><div style="font-size:13px;font-weight:600">录音和睡眠明细不出手机</div>
+              <div class="tiny mt8">原始音频仅存本地、从不上传。细节见"我的 → 数据与隐私"。</div></div>
+            </div>
+            <div class="notice mt16">本产品提供的是基于体动的<b>睡眠估计</b>，不是医学诊断，也不能替代就医。</div>
+          </div>
+
+          <button class="btn primary mt24" onclick="go('home')">开始今晚 · 不用注册</button>
+          <button class="btn link mt12" onclick="go('home')">先随便看看</button>
+          <div class="pad-bot"></div>
+        </div>
+      </section>
+
+      <!-- ================= 1. 今晚 ================= -->
+      <section class="screen" id="s-home">
+        <div class="scroll pad-top">
+          <div class="between">
+            <div>
+              <div class="hello">9月29日 周一 · 23:41</div>
+              <div class="h1 mt8" style="font-size:22px">该睡了</div>
+            </div>
+            <div style="text-align:right">
+              <div class="streak">🌙 已连续记录 12 晚</div>
+              <div class="tiny mt8">本周已记 4 晚</div>
+            </div>
+          </div>
+
+          <!-- 今晚的动作 -->
+          <div class="action-card mt20" style="position:relative;z-index:1">
+            <div class="action-label">今晚只改这一件事</div>
+            <div class="action-title">睡前做 3 组 4-7-8 呼吸</div>
+            <div class="action-why">前 3 晚数据显示，你做完这个动作的夜里，<b style="color:#f3c98e">入睡平均快了 11 分钟</b>。今晚再做一次，明早我们验证是否仍然有效。</div>
+            <div class="row gap8 mt16">
+              <span class="pill warm">⏱ 约 3 分钟</span>
+              <span class="pill">🎯 目标：入睡耗时</span>
+            </div>
+            <button class="btn primary mt20" onclick="startNight()">开始今晚 · 放手机记录</button>
+          </div>
+
+          <!-- 助眠入口 -->
+          <div class="mini-player mt16" onclick="go('player')">
+            <div class="mini-art">🌧</div>
+            <div style="flex:1">
+              <div style="font-size:14px;font-weight:600">雨落屋檐 + 低频钢琴</div>
+              <div class="tiny mt8">上次听到 12:04 · 入睡后自动停</div>
+            </div>
+            <div class="mini-bars"><i></i><i></i><i></i><i></i></div>
+          </div>
+
+          <!-- 昨夜速览 -->
+          <div class="between mt24">
+            <div class="h2">昨夜速览</div>
+            <div class="pill grey" onclick="go('report')" style="cursor:pointer">看完整早报 ›</div>
+          </div>
+          <div class="kpi3 mt12">
+            <div><div class="kpi-num">7<span>h</span>12<span>m</span></div><div class="kpi-lb">在床时长</div></div>
+            <div><div class="kpi-num">1<span>次</span></div><div class="kpi-lb">夜醒</div></div>
+            <div><div class="kpi-num">18<span>分</span></div><div class="kpi-lb">鼾声</div></div>
+          </div>
+
+          <div class="card mt16">
+            <div class="row gap8" style="align-items:flex-start">
+              <div style="font-size:16px">💬</div>
+              <div class="sub" style="color:#cfd7ef">昨晚整体比上周三<b style="color:#6ee0a8">好一点</b>：入睡用了 21 分钟（上周三 34 分钟），中间醒 1 次。音频在 23:58 自动停了，比平时早 6 分钟。</div>
+            </div>
+          </div>
+
+          <div class="pad-bot"></div>
+        </div>
+        <div class="tabbar" data-tabs></div>
+      </section>
+      <!-- ================= 2. 助眠播放器 ================= -->
+      <section class="screen" id="s-player">
+        <div class="back" onclick="go('home')">‹</div>
+        <div class="scroll pad-top">
+          <div class="h2 mt16" style="text-align:center">助眠音景</div>
+          <div class="tiny mt8" style="text-align:center">锁屏与后台都不会断</div>
+
+          <div class="player-art mt24"><div style="font-size:52px">🌧</div></div>
+          <div class="mix-bars mt24" id="mixBars"></div>
+
+          <div class="mt24" style="text-align:center">
+            <div class="h1" style="font-size:19px">雨落屋檐 + 低频钢琴</div>
+            <div class="tiny mt8">已播放 <span id="playClock">00:00</span> · 音量 42%</div>
+          </div>
+
+          <!-- 入睡自动停（核心） -->
+          <div class="autostop mt20" id="autostopBox">
+            <div class="between">
+              <div class="st" id="asTitle">🌙 入睡自动停 · 已开启</div>
+              <div class="pill green" id="asState">等待入睡</div>
+            </div>
+            <div class="tiny mt8" id="asDesc">检测到你已经睡着后，会再等 10 分钟确认安静，然后音量在 30 秒内慢慢淡出——而不是固定定时突然静音。</div>
+            <div class="track mt12"><div class="fill" id="asBar" style="width:0%"></div></div>
+            <div class="between mt8"><span class="tiny">兜底最大时长</span><span class="tiny">60:00</span></div>
+          </div>
+
+          <div class="between mt20">
+            <button class="btn ghost" style="width:44%" onclick="go('home')">暂停</button>
+            <button class="btn primary" style="width:52%" onclick="simulateSleep()" id="simBtn">模拟入睡 ▸</button>
+          </div>
+
+          <div class="mt24">
+            <div class="h2">混音</div>
+            <div class="mixer mt12">
+              <div class="mix-row"><div class="between"><b>雨声</b><span class="tiny">58%</span></div><div class="track"><div class="fill" style="width:58%"></div></div></div>
+              <div class="mix-row"><div class="between"><b>低频钢琴</b><span class="tiny">34%</span></div><div class="track"><div class="fill" style="width:34%"></div></div></div>
+              <div class="mix-row"><div class="between"><b>粉红噪声</b><span class="tiny">22%</span></div><div class="track"><div class="fill" style="width:22%"></div></div></div>
+            </div>
+          </div>
+          <div class="pad-bot"></div>
+        </div>
+      </section>
+
+      <!-- ================= 3. 夜间记录中 ================= -->
+      <section class="screen night" id="s-night">
+        <div class="night-center">
+          <div class="night-orb" id="nightOrb">🌙</div>
+          <div style="text-align:center">
+            <div class="h2" id="nightTitle">记录中</div>
+            <div class="tiny mt8" id="nightDesc">请把手机放在床垫上（枕头外侧），屏幕朝下</div>
+          </div>
+
+          <div class="card" style="width:100%;max-width:300px">
+            <div class="between"><span class="tiny">体动采集</span><span class="pill green">5 Hz</span></div>
+            <div class="divider" style="margin:12px 0"></div>
+            <div class="between"><span class="tiny">鼾声监听</span><span class="pill green" id="snoreState">待触发</span></div>
+            <div class="divider" style="margin:12px 0"></div>
+            <div class="between"><span class="tiny">本次耗电</span><span class="pill grey" id="battery">1%</span></div>
+            <div class="divider" style="margin:12px 0"></div>
+            <div class="between"><span class="tiny">数据位置</span><span class="pill grey">仅本机</span></div>
+          </div>
+
+          <div class="notice" style="max-width:300px">原始录音不会上传，也不会整夜持续录音：只在检测到声音事件时录一小段，供你早上回放确认。</div>
+
+          <button class="btn ghost mt12" style="max-width:300px" onclick="wakeUp()">⏩ 演示：我醒了</button>
+        </div>
+      </section>
+      <!-- ================= 4. 早报 ================= -->
+      <section class="screen" id="s-report">
+        <div class="scroll pad-top">
+          <div class="between">
+            <div><div class="hello">今日早报 · 9月29日</div><div class="h1 mt8" style="font-size:22px">昨晚睡得还行</div></div>
+            <div class="pill grey" onclick="openShare()" style="cursor:pointer">分享卡片</div>
+          </div>
+
+          <div class="hero mt16">
+            <div class="big">7<span style="font-size:22px">h</span>12<span style="font-size:22px">m</span></div>
+            <div class="tiny mt8">在床 8 小时 03 分 · 睡眠效率 89%</div>
+          </div>
+
+          <div class="kpi3 mt16">
+            <div><div class="kpi-num">21<span>分</span></div><div class="kpi-lb">入睡耗时</div></div>
+            <div><div class="kpi-num">1<span>次</span></div><div class="kpi-lb">夜醒</div></div>
+            <div><div class="kpi-num">18<span>分</span></div><div class="kpi-lb">鼾声</div></div>
+          </div>
+
+          <!-- 阶段图 -->
+          <div class="card mt16">
+            <div class="between"><div class="h2">睡眠阶段（估计）</div><div class="tiny">23:58 — 07:12</div></div>
+            <div class="hypno mt12" id="hypno"></div>
+            <div class="legend">
+              <span><i style="background:#f0a4a4"></i>清醒</span>
+              <span><i style="background:#8f9dd6"></i>浅睡</span>
+              <span><i style="background:#5566c9"></i>深睡</span>
+              <span style="margin-left:auto;color:#f3c98e">底纹 = 体动强度</span>
+            </div>
+            <div class="notice mt12">这是<b>基于体动的估计</b>，不是医学诊断，也无法区分 REM。手机监测与心电/脑电设备本来就不同，请只把它当作趋势参考。</div>
+          </div>
+
+          <!-- 一句话解读 -->
+          <div class="card mt16">
+            <div class="row gap8"><div style="font-size:16px">💬</div><div class="h2">一句话解读</div></div>
+            <div class="sub mt12" style="color:#cfd7ef">昨晚前 40 分钟翻了几次身才睡着，之后比较稳；1 点后有一次 6 分钟的清醒，可能和卧室温度偏高有关（28℃→26℃ 那一小时你动得最少）。<b style="color:#f3c98e">整体比上周三好一点。</b></div>
+          </div>
+
+          <!-- 动作效果对比（干预闭环） -->
+          <div class="card solid mt16">
+            <div class="between">
+              <div class="h2">昨晚动作 · 效果对比</div>
+              <span class="pill green">有效</span>
+            </div>
+            <div class="tiny mt8">只改「睡前 3 组 4-7-8 呼吸」这一件事，其余习惯保持不动</div>
+            <div class="compare">
+              <div class="cmp"><div class="t">执行前 3 晚均值</div><div class="v">32<span style="font-size:11px;color:#8b95b5"> 分</span></div><div class="d flat">入睡耗时</div></div>
+              <div class="cmp" style="border-color:rgba(110,224,168,.3);background:rgba(110,224,168,.08)">
+                <div class="t">昨晚</div><div class="v">21<span style="font-size:11px;color:#8b95b5"> 分</span></div><div class="d up">↓ 快了 11 分</div></div>
+            </div>
+            <div class="between mt16"><span class="tiny">已累计验证 2 次 · 第 3 次后写入"对我有效"</span><span class="pill grey" onclick="go('trend')" style="cursor:pointer">看我的动作清单 ›</span></div>
+          </div>
+
+          <!-- 鼾声事件 -->
+          <div class="card mt16">
+            <div class="between"><div class="h2">鼾声 / 梦话事件</div><div class="pill grey">3 段</div></div>
+            <div class="mt8">
+              <div class="event">
+                <div class="ev-ico">😮‍💨</div>
+                <div><div style="font-size:13.5px;font-weight:600">鼾声 · 9 分钟</div><div class="tiny mt8">02:14 — 02:23 · 仰卧时段</div></div>
+                <div class="ev-play" onclick="playSnore(this)">▶ 播放</div>
+              </div>
+              <div class="event">
+                <div class="ev-ico">🗣</div>
+                <div><div style="font-size:13.5px;font-weight:600">梦话 · 8 秒</div><div class="tiny mt8">03:41 · 内容不清</div></div>
+                <div class="ev-play" onclick="playSnore(this)">▶ 播放</div>
+              </div>
+              <div class="event">
+                <div class="ev-ico">🌬</div>
+                <div><div style="font-size:13.5px;font-weight:600">疑似呼吸声 · 1 分钟</div><div class="tiny mt8">05:02 · 可能为风扇噪声（请回放确认）</div></div>
+                <div class="ev-play" onclick="playSnore(this)">▶ 播放</div>
+              </div>
+            </div>
+            <div class="notice mt16">识别可能把<b>风扇声、伴侣的呼吸</b>误判为鼾声，请点开回放自行确认——我们宁可让你复核，也不假装百分百准。</div>
+          </div>
+
+          <!-- 就医提示 -->
+          <div class="card mt16" style="border-color:rgba(255,180,180,.25);background:rgba(255,120,120,.07)">
+            <div class="row gap8"><div style="font-size:16px">🩺</div><div class="h2">什么时候该去看医生</div></div>
+            <div class="sub mt12" style="color:#e6d3d3">若出现以下任一情况，建议到呼吸科/睡眠门诊评估，不要只靠 App：<br>· 打鼾伴<b>呼吸暂停或憋醒</b>　· 白天严重嗜睡、开车打瞌睡<br>· 夜醒伴心悸、头痛　· 血压难控且伴打鼾</div>
+          </div>
+
+          <div class="pad-bot"></div>
+        </div>
+        <div class="tabbar" data-tabs></div>
+      </section>
+
+      <!-- ================= 5. 趋势 ================= -->
+      <section class="screen" id="s-trend">
+        <div class="scroll pad-top">
+          <div class="hello">趋势</div>
+          <div class="h1 mt8" style="font-size:22px">最近 7 晚</div>
+
+          <div class="card mt16">
+            <div class="between"><div class="h2">在床时长</div><span class="pill grey">均值 6h58m</span></div>
+            <div class="bars7 mt16">
+              <div class="goal" style="top:26%"><span>目标 7h</span></div>
+              <div class="bcol"><div class="bar" style="height:62%"></div><div class="lb">周二</div></div>
+              <div class="bcol"><div class="bar" style="height:48%"></div><div class="lb">周三</div></div>
+              <div class="bcol"><div class="bar" style="height:71%"></div><div class="lb">周四</div></div>
+              <div class="bcol"><div class="bar" style="height:55%"></div><div class="lb">周五</div></div>
+              <div class="bcol"><div class="bar" style="height:83%"></div><div class="lb">周六</div></div>
+              <div class="bcol"><div class="bar" style="height:44%"></div><div class="lb">周日</div></div>
+              <div class="bcol best"><div class="bar" style="height:88%"></div><div class="lb">昨天</div></div>
+            </div>
+            <div class="notice mt16">我们不展示"睡眠分数排行榜"。分数下滑时只做中性提示，避免把正常的起伏变成焦虑。</div>
+          </div>
+
+          <div class="card mt16">
+            <div class="between"><div class="h2">本周记录</div><span class="pill warm">4 / 3 晚 ✓</span></div>
+            <div class="track mt12"><div class="fill" style="width:80%"></div></div>
+            <div class="between mt8"><span class="tiny">目标：每周 ≥3 晚</span><span class="tiny">已达标</span></div>
+            <div class="tiny mt12">连续记录 12 晚 · 从 9 月 17 日开始</div>
+          </div>
+
+          <!-- 我的动作清单 -->
+          <div class="between mt24">
+            <div class="h2">我的动作清单</div>
+            <div class="tiny">随使用时长变厚</div>
+          </div>
+          <div class="sub mt8">每个动作至少要验证 3 晚才下结论</div>
+
+          <div class="card mt12">
+            <div class="playlist">
+              <div class="item">
+                <div class="item-badge" style="background:rgba(110,224,168,.15)">✅</div>
+                <div style="flex:1"><div style="font-size:13.5px;font-weight:600">睡前 3 组 4-7-8 呼吸</div>
+                  <div class="tiny mt8">验证 5 次 · 入睡平均快 9 分钟</div></div>
+                <span class="pill green">有效</span>
+              </div>
+              <div class="item">
+                <div class="item-badge" style="background:rgba(110,224,168,.15)">✅</div>
+                <div style="flex:1"><div style="font-size:13.5px;font-weight:600">卧室温度调到 26℃</div>
+                  <div class="tiny mt8">验证 4 次 · 夜醒少 0.8 次</div></div>
+                <span class="pill green">有效</span>
+              </div>
+              <div class="item">
+                <div class="item-badge" style="background:rgba(255,120,120,.15)">✕</div>
+                <div style="flex:1"><div style="font-size:13.5px;font-weight:600">睡前 1 小时不看手机</div>
+                  <div class="tiny mt8">验证 4 次 · 未见明显变化</div></div>
+                <span class="pill red">无效</span>
+              </div>
+              <div class="item">
+                <div class="item-badge" style="background:rgba(255,255,255,.08)">?</div>
+                <div style="flex:1"><div style="font-size:13.5px;font-weight:600">午后不喝咖啡</div>
+                  <div class="tiny mt8">验证 1 次 · 还差 2 晚</div></div>
+                <span class="pill grey">数据不足</span>
+              </div>
+              <div class="item">
+                <div class="item-badge" style="background:rgba(255,255,255,.08)">?</div>
+                <div style="flex:1"><div style="font-size:13.5px;font-weight:600">固定起床时间（刺激控制）</div>
+                  <div class="tiny mt8">还没试过 · 建议下一步优先验证</div></div>
+                <span class="pill grey">数据不足</span>
+              </div>
+            </div>
+          </div>
+          <div class="notice mt16">"无效"也很有用：它帮你排除掉那些网上都在说、但对你个人没用的方法。这份清单只属于你，无法被一次性抄走。</div>
+
+          <div class="pad-bot"></div>
+        </div>
+        <div class="tabbar" data-tabs></div>
+      </section>
+
+      <!-- ================= 6. 我的 ================= -->
+      <section class="screen" id="s-me">
+        <div class="scroll pad-top">
+          <div class="hello">我的</div>
+          <div class="h1 mt8" style="font-size:22px">夜航</div>
+
+          <div class="card mt16">
+            <div class="between"><div><div style="font-size:14px">音景收藏</div><div class="tiny mt8">12 个音景 · 4 个自定义混音</div></div><div class="tiny">›</div></div>
+            <div class="divider"></div>
+            <div class="between" onclick="openModal('m-privacy')" style="cursor:pointer"><div><div style="font-size:14px">数据与隐私</div><div class="tiny mt8">我们上传什么、不上传什么</div></div><div class="tiny">›</div></div>
+            <div class="divider"></div>
+            <div class="between"><div><div style="font-size:14px">提醒我上床</div><div class="tiny mt8">每天 23:20 · 系统通知</div></div><span class="pill grey">已开启</span></div>
+            <div class="divider"></div>
+            <div class="between"><div><div style="font-size:14px">桌面小组件</div><div class="tiny mt8">iPhone 主屏看昨晚在床时长</div></div><span class="pill green">已添加</span></div>
+          </div>
+
+          <div class="card mt16">
+            <div class="h2">关于数据</div>
+            <div class="mt12" style="font-size:12.5px;line-height:2;color:#c3ccea">
+              <div class="between"><span>原始鼾声/梦话录音</span><span class="pill grey">仅本机</span></div>
+              <div class="between mt12"><span>睡眠阶段明细</span><span class="pill grey">仅本机</span></div>
+              <div class="between mt12"><span>匿名聚合特征</span><span class="pill grey">上云（假名化）</span></div>
+              <div class="between mt12"><span>广告 / 追踪 SDK</span><span class="pill green">零</span></div>
+            </div>
+            <button class="btn ghost sm mt16" style="width:100%" onclick="openModal('m-delete')">一键删除全部数据</button>
+          </div>
+
+          <div class="notice mt16">夜航提供基于体动的睡眠估计，不提供医疗诊断，不能替代就医。相关文案不含"治疗""缓解疾病"等表述。</div>
+          <div class="tiny mt12" style="text-align:center">v0.1 MVP · 演示数据</div>
+          <div class="pad-bot"></div>
+        </div>
+        <div class="tabbar" data-tabs></div>
+      </section>
+      <!-- ================= 弹层：分享卡片 ================= -->
+      <div class="sheet-mask" id="m-share" onclick="closeSheet(event,'m-share')">
+        <div class="sheet" onclick="event.stopPropagation()">
+          <div class="between"><div class="h1" style="font-size:19px">分享昨晚</div><div class="pill grey" onclick="closeSheet(null,'m-share')" style="cursor:pointer">关闭</div></div>
+          <div class="share-card mt16">
+            <div class="between"><span class="tiny" style="color:#c3ccea">夜航 · 9月29日</span><span class="tiny">🌙 已记录 12 晚</span></div>
+            <div class="mt16" style="font-size:40px;font-weight:700;letter-spacing:-1.5px">7h12m</div>
+            <div class="tiny mt8">昨晚在床时长</div>
+            <div class="row gap8 mt16">
+              <span class="pill">入睡 21 分</span><span class="pill">夜醒 1 次</span><span class="pill">鼾声 18 分</span>
+            </div>
+            <div class="divider"></div>
+            <div class="tiny" style="color:#c3ccea">🌙 手机放床头就够了</div>
+          </div>
+          <div class="notice mt16">卡片<b>不含分数与排名</b>：睡眠不是比赛，避免制造攀比与焦虑。</div>
+          <button class="btn primary mt16" onclick="closeSheet(null,'m-share')">保存图片</button>
+        </div>
+      </div>
+
+      <!-- ================= 弹窗：数据与隐私 ================= -->
+      <div class="modal-mask" id="m-privacy" onclick="closeSheet(event,'m-privacy')">
+        <div class="modal" onclick="event.stopPropagation()">
+          <div class="h2">数据与隐私（大白话版）</div>
+          <div class="mt12" style="font-size:12.5px;line-height:1.9;color:#c3ccea">
+            <div><b>不上传</b>：鼾声/梦话原始录音、睡眠阶段逐分钟明细。这些只存在你手机里，删 App 即删。</div>
+            <div class="mt12"><b>会上传</b>：去掉身份标识的分钟级运动统计与阶段标签，用于改进算法和生成早报解读。没有账号体系，只有设备级随机 ID。</div>
+            <div class="mt12"><b>没有</b>：广告 SDK、第三方追踪 SDK、通讯录/相册权限。</div>
+            <div class="mt12"><b>你可以</b>：随时一键删除全部数据；不联网也能用核心记录功能。</div>
+          </div>
+          <div class="notice mt16">我们刻意把"会上传什么"说全，而不是只说"数据留在手机上"——这是我们对你这边的承诺。</div>
+          <button class="btn ghost mt16" onclick="closeSheet(null,'m-privacy')">知道了</button>
+        </div>
+      </div>
+
+      <!-- ================= 弹窗：删除数据 ================= -->
+      <div class="modal-mask" id="m-delete" onclick="closeSheet(event,'m-delete')">
+        <div class="modal" onclick="event.stopPropagation()">
+          <div class="h2">删除全部数据？</div>
+          <div class="sub mt12">本机录音、睡眠明细、动作清单都会被清除且不可恢复。云端只保留无法关联到你的匿名统计。</div>
+          <div class="row gap12 mt20">
+            <button class="btn ghost" onclick="closeSheet(null,'m-delete')">取消</button>
+            <button class="btn primary" onclick="closeSheet(null,'m-delete')">确认删除</button>
+          </div>
+        </div>
+      </div>
+<!-- SCRIPT -->
+    </div>
+  </div>
+</div>
+<script>
+/* ============ 屏幕与导航 ============ */
+const SCREENS = ['onboard','home','player','night','report','trend','me'];
+const TAB_MAP = { home:'home', report:'report', trend:'trend', me:'me' };
+const LABEL = { onboard:'首次使用', home:'今晚', player:'助眠播放器', night:'夜间记录', report:'早报', trend:'趋势', me:'我的' };
+const TABS = [
+  { id:'home', ico:'🌙', lb:'今晚' },
+  { id:'report', ico:'☀️', lb:'早报', dot:true },
+  { id:'trend', ico:'📈', lb:'趋势' },
+  { id:'me', ico:'👤', lb:'我的' }
+];
+let cur = 'home';
+let reportRead = false;
+
+function buildTabs() {
+  document.querySelectorAll('[data-tabs]').forEach(box => {
+    box.innerHTML = TABS.map(t =>
+      `<div class="tab" data-tab="${t.id}"><div class="ico">${t.ico}</div><div>${t.lb}</div>
+       ${t.dot && !reportRead ? '<div class="dot" data-dot></div>' : ''}</div>`).join('');
+    box.querySelectorAll('.tab').forEach(el => el.onclick = () => go(el.dataset.tab));
+  });
+}
+
+function syncTabs() {
+  const active = TAB_MAP[cur] || '';
+  document.querySelectorAll('[data-tab]').forEach(el => el.classList.toggle('active', el.dataset.tab === active));
+}
+
+function go(id) {
+  if (!SCREENS.includes(id)) return;
+  document.querySelectorAll('.screen').forEach(s => s.classList.toggle('active', s.id === 's-' + id));
+  cur = id;
+  if (id === 'report') { reportRead = true; buildTabs(); }
+  syncTabs();
+  const clock = document.getElementById('clock');
+  if (id === 'night') clock.textContent = '00:12';
+  else if (id === 'report') clock.textContent = '07:12';
+  else if (id === 'player') clock.textContent = '23:45';
+  if (id === 'player') startPlayClock();
+  if (id === 'night') startNightWatch();
+}
+
+/* ============ 顶部时钟 ============ */
+function tickClock(base) {
+  const el = document.getElementById('clock');
+  let t = base;
+  return setInterval(() => {
+    t = (t + 1) % 1440;
+    const h = String(Math.floor(t / 60)).padStart(2, '0'), m = String(t % 60).padStart(2, '0');
+    el.textContent = h + ':' + m;
+  }, 60000);
+}
+
+/* ============ 播放器：计时 + 波形 ============ */
+let playTimer = null, playSec = 0;
+function startPlayClock() {
+  if (playTimer) return;
+  playTimer = setInterval(() => {
+    playSec++;
+    const m = String(Math.floor(playSec / 60)).padStart(2, '0'), s = String(playSec % 60).padStart(2, '0');
+    document.getElementById('playClock').textContent = m + ':' + s;
+  }, 1000);
+}
+function buildMixBars() {
+  const box = document.getElementById('mixBars');
+  box.innerHTML = Array.from({ length: 26 }, () => '<i></i>').join('');
+  box.querySelectorAll('i').forEach((b, i) => { b.style.animationDelay = (i * 0.07) + 's'; });
+}
+
+/* ============ 入睡自动停（核心演示） ============ */
+let asRunning = false;
+function simulateSleep() {
+  if (asRunning) return;
+  asRunning = true;
+  const state = document.getElementById('asState');
+  const desc = document.getElementById('asDesc');
+  const title = document.getElementById('asTitle');
+  const bar = document.getElementById('asBar');
+  document.getElementById('simBtn').textContent = '演示进行中…';
+
+  state.textContent = '检测到入睡';
+  state.className = 'pill warm';
+  desc.innerHTML = '已在 00:12 检测到入睡迹象。现在进入 <b>10 分钟静默确认</b>——只有持续安静才会判定睡着，避免你翻身时误判。';
+  bar.style.transition = 'width 3.6s linear';
+  bar.style.width = '100%';
+
+  setTimeout(() => {
+    title.textContent = '🌙 音量淡出中';
+    desc.innerHTML = '确认安静通过。音量将在 30 秒内逐级淡出，而不是"啪"一下静音。';
+    state.textContent = '淡出中';
+    state.className = 'pill warm';
+    bar.style.transition = 'width .4s';
+
+    setTimeout(() => {
+      title.textContent = '🌙 已停止播放 · 记录继续';
+      desc.innerHTML = '音频在 00:22 完全淡出。屏幕熄灭，但体动与鼾声监听会继续到你醒来——这一晚的耗电预计 6%。';
+      state.textContent = '已停止';
+      state.className = 'pill green';
+      if (playTimer) { clearInterval(playTimer); playTimer = null; }
+      setTimeout(() => go('night'), 1400);
+    }, 1400);
+  }, 3700);
+}
+
+function resetAutostop() {
+  document.getElementById('asTitle').textContent = '🌙 入睡自动停 · 已开启';
+  document.getElementById('asState').textContent = '等待入睡';
+  document.getElementById('asState').className = 'pill green';
+  document.getElementById('asDesc').innerHTML = '检测到你已经睡着后，会再等 10 分钟确认安静，然后音量在 30 秒内慢慢淡出——而不是固定定时突然静音。';
+  document.getElementById('asBar').style.transition = 'none';
+  document.getElementById('asBar').style.width = '0%';
+  document.getElementById('simBtn').textContent = '模拟入睡 ▸';
+  if (playTimer) { clearInterval(playTimer); playTimer = null; }
+}
+
+/* ============ 夜间记录 ============ */
+let nightTimer = null;
+function startNightWatch() {
+  if (nightTimer) clearInterval(nightTimer);
+  let snore = 0, batt = 1, t = 0;
+  const sEl = document.getElementById('snoreState');
+  const bEl = document.getElementById('battery');
+  const dEl = document.getElementById('nightDesc');
+  const orb = document.getElementById('nightOrb');
+  nightTimer = setInterval(() => {
+    t++;
+    if (t === 3) { sEl.textContent = '已触发 1 次'; sEl.className = 'pill warm'; }
+    if (t === 6) { snore++; sEl.textContent = '已触发 ' + snore + ' 次 · 本机'; }
+    if (t % 2 === 0 && batt < 6) { batt++; bEl.textContent = batt + '%'; }
+    if (t === 4) { orb.textContent = '😴'; dEl.textContent = '已判定入睡 · 低频采集 · 屏幕已熄灭'; }
+    if (t === 9) { dEl.textContent = '凌晨 3 点左右体动略多，已记录一次浅睡段'; }
+  }, 900);
+}
+function wakeUp() {
+  if (nightTimer) { clearInterval(nightTimer); nightTimer = null; }
+  go('report');
+  setTimeout(() => document.getElementById('hypno').scrollIntoView({ block: 'center' }), 120);
+}
+
+/* ============ 睡眠阶段图（体动法估计） ============ */
+const SEGS = [
+  ['wake', 0, 6], ['light', 6, 18], ['light', 24, 30], ['deep', 54, 42], ['light', 96, 26],
+  ['deep', 122, 58], ['light', 180, 30], ['wake', 210, 6], ['light', 216, 42], ['deep', 258, 40],
+  ['light', 298, 52], ['light', 350, 30], ['deep', 380, 26], ['light', 406, 20], ['wake', 426, 8]
+];
+const TOTAL = 434;
+const LANE = { wake: 6, light: 44, deep: 82 };
+function buildHypno() {
+  const box = document.getElementById('hypno');
+  if (!box) return;
+  let html = '';
+  SEGS.forEach(([st, start, dur]) => {
+    html += `<div class="seg ${st}" style="left:${(start / TOTAL * 100).toFixed(2)}%;width:${(dur / TOTAL * 100).toFixed(2)}%;top:${LANE[st]}px"></div>`;
+  });
+  for (let i = 0; i < 87; i++) {
+    const r = Math.abs(Math.sin(i * 12.9898) * 43758.5453) % 1;
+    const h = 2 + r * 6;
+    html += `<div style="position:absolute;bottom:0;left:${(i / 87 * 100).toFixed(2)}%;width:1.05%;height:${h.toFixed(1)}px;background:rgba(243,201,142,.32);border-radius:1px"></div>`;
+  }
+  box.innerHTML = html;
+}
+
+/* ============ 弹层 ============ */
+function openShare() { document.getElementById('m-share').classList.add('show'); }
+function openModal(id) { document.getElementById(id).classList.add('show'); }
+function closeSheet(e, id) {
+  if (e && e.target !== e.currentTarget && e.type === 'click') return;
+  document.getElementById(id).classList.remove('show');
+}
+function playSnore(btn) {
+  if (btn.dataset.on === '1') {
+    btn.textContent = '■ 停止'; btn.dataset.on = '0';
+  } else {
+    btn.textContent = '🔊 播放中…'; btn.dataset.on = '1';
+  }
+  setTimeout(() => { btn.textContent = '▶ 播放'; btn.dataset.on = ''; }, 2400);
+}
+
+/* ============ 开始今晚（MVP 无校准，直接进入助眠） ============ */
+function startNight() {
+  playSec = 0; asRunning = false; resetAutostop();
+  go('player');
+}
+
+/* ============ 引导页目标选择 ============ */
+function initGoals() {
+  document.querySelectorAll('#obGoals [data-goal]').forEach(c => c.onclick = () => {
+    document.querySelectorAll('#obGoals [data-goal]').forEach(x => {
+      x.classList.remove('warm'); x.classList.add('solid');
+      const p = x.querySelector('.pill'); if (p && p.textContent === '已选') p.remove();
+    });
+    c.classList.remove('solid'); c.classList.add('warm');
+    if (!c.querySelector('.pill') || c.querySelector('.pill').textContent !== '已选') {
+      const tag = document.createElement('div');
+      tag.className = 'pill warm'; tag.textContent = '已选';
+      c.querySelector('.between').appendChild(tag);
+    }
+  });
+}
+
+/* ============ 侧栏跳转 ============ */
+function initJump() {
+  const box = document.getElementById('jumpBox');
+  const items = [...SCREENS.map(k => [LABEL[k], k]), ['分享卡片', 'share'], ['数据与隐私', 'privacy'], ['删除数据', 'delete']];
+  box.innerHTML = items.map(([lb, k]) => `<button data-j="${k}">${lb}</button>`).join('');
+  box.querySelectorAll('button').forEach(b => b.onclick = () => {
+    const k = b.dataset.j;
+    if (k === 'share') return openShare();
+    if (k === 'privacy') return openModal('m-privacy');
+    if (k === 'delete') return openModal('m-delete');
+    if (k === 'player') { playSec = 0; asRunning = false; resetAutostop(); }
+    if (k === 'night') { document.getElementById('nightOrb').textContent = '🌙'; }
+    go(k);
+  });
+}
+
+/* ============ 启动 ============ */
+buildTabs();
+buildMixBars();
+buildHypno();
+initGoals();
+initJump();
+go('home');
+tickClock(23 * 60 + 41);
+</script>
+<script>
+/* ============ PWA：离线缓存（需 https 或 localhost 才生效） ============ */
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('./sw.js').catch(() => {});
+  });
+}
+</script>
+</body>
+</html>
