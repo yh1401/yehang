@@ -372,7 +372,7 @@
           <div class="mini-player mt16" onclick="go('player')">
             <div class="mini-art">🌧</div>
             <div style="flex:1">
-              <div style="font-size:14px;font-weight:600">雨落屋檐 + 低频钢琴</div>
+              <div style="font-size:14px;font-weight:600">雨落屋檐 + 海浪 + 低频钢琴</div>
               <div class="tiny mt8">上次听到 12:04 · 入睡后自动停</div>
             </div>
             <div class="mini-bars"><i></i><i></i><i></i><i></i></div>
@@ -411,7 +411,7 @@
           <div class="mix-bars mt24" id="mixBars"></div>
 
           <div class="mt24" style="text-align:center">
-            <div class="h1" style="font-size:19px">雨落屋檐 + 低频钢琴</div>
+            <div class="h1" style="font-size:19px">雨落屋檐 + 海浪 + 低频钢琴</div>
             <div class="tiny mt8">已播放 <span id="playClock">00:00</span> · 音量 <span id="volLabel">42%</span> · <span id="audioState">音景已开启</span></div>
           </div>
 
@@ -435,10 +435,11 @@
             <div class="h2">混音</div>
             <div class="mixer mt12">
               <div class="mix-row" data-track="rain"><div class="between"><b>雨声</b><span class="tiny" data-val>58%</span></div><div class="track"><div class="fill" style="width:58%"></div></div></div>
+              <div class="mix-row" data-track="ocean"><div class="between"><b>海浪</b><span class="tiny" data-val>45%</span></div><div class="track"><div class="fill" style="width:45%"></div></div></div>
               <div class="mix-row" data-track="piano"><div class="between"><b>低频钢琴</b><span class="tiny" data-val>34%</span></div><div class="track"><div class="fill" style="width:34%"></div></div></div>
               <div class="mix-row" data-track="pink"><div class="between"><b>粉红噪声</b><span class="tiny" data-val>22%</span></div><div class="track"><div class="fill" style="width:22%"></div></div></div>
             </div>
-            <div class="tiny mt12">左右拖动圆条即可实时调整三条轨的音量。</div>
+            <div class="tiny mt12">左右拖动圆条即可实时调整四条轨的音量。</div>
           </div>
           <div class="pad-bot"></div>
         </div>
@@ -779,7 +780,7 @@ function tickClock(base) {
 /* ============ 播放器：真实助眠音景（Web Audio 纯合成，不需要音频文件） ============ */
 const AUDIO = {
   ctx: null, master: null, analyser: null, gains: {}, srcs: [],
-  levels: { rain: .58, piano: .34, pink: .22 },   // 三条轨的当前音量（对应混音器）
+  levels: { rain: .58, ocean: .45, piano: .34, pink: .22 },   // 四条轨的当前音量（对应混音器）
   vol: .42,                                       // 总音量，对应界面的“音量 42%”
   active: false, paused: false
 };
@@ -818,8 +819,8 @@ function ensureAudio() {
   }
   AUDIO.white = white; AUDIO.pink = pink;
 
-  // 三条轨各挂一个增益节点
-  ['rain', 'piano', 'pink'].forEach(k => {
+  // 四条轨各挂一个增益节点
+  ['rain', 'ocean', 'piano', 'pink'].forEach(k => {
     const g = ctx.createGain(); g.gain.value = AUDIO.levels[k];
     g.connect(AUDIO.master); AUDIO.gains[k] = g;
   });
@@ -839,6 +840,25 @@ function ensureAudio() {
   const plp = ctx.createBiquadFilter(); plp.type = 'lowpass'; plp.frequency.value = 900;
   ps.connect(plp); plp.connect(AUDIO.gains.pink);
   ps.start(); AUDIO.srcs.push(ps);
+
+  // ③ 海浪 = 布朗噪声 → 低通（截止被极慢 LFO 揉动，浪头更亮、浪谷更闷）
+  //          + 一条约 18 秒周期的"涨落"增益，听感就是一波一波推上来又退下去
+  const on = Math.floor(ctx.sampleRate * 4);
+  const brown = ctx.createBuffer(1, on, ctx.sampleRate), br = brown.getChannelData(0);
+  let last = 0;
+  for (let i = 0; i < on; i++) { const x = Math.random() * 2 - 1; last = (last + .02 * x) / 1.02; br[i] = last * 3.5; }
+  const os = ctx.createBufferSource(); os.buffer = brown; os.loop = true;
+  const olp = ctx.createBiquadFilter(); olp.type = 'lowpass'; olp.frequency.value = 520; olp.Q.value = .4;
+  const swell = ctx.createGain(); swell.gain.value = .62;                       // 涨落中心
+  const swellLfo = ctx.createOscillator(); swellLfo.frequency.value = .055;      // 一波约 18 秒
+  const swellAmt = ctx.createGain(); swellAmt.gain.value = .38;                  // 涨落区间 0.24 ~ 1.0
+  swellLfo.connect(swellAmt); swellAmt.connect(swell.gain);
+  const olpLfo = ctx.createOscillator(); olpLfo.frequency.value = .035;
+  const olpAmt = ctx.createGain(); olpAmt.gain.value = 260;
+  olpLfo.connect(olpAmt); olpAmt.connect(olp.frequency);
+  os.connect(olp); olp.connect(swell); swell.connect(AUDIO.gains.ocean);
+  os.start(); swellLfo.start(); olpLfo.start();
+  AUDIO.srcs.push(os, swellLfo, olpLfo);
 
   return ctx;
 }
