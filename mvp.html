@@ -145,6 +145,9 @@
   .autostop { border-radius: 18px; padding: 15px; background: rgba(124,140,255,.13);
     border: 1px solid rgba(124,140,255,.25); }
   .autostop .st { font-size: 13px; font-weight: 650; color: #c9d2ff; }
+  .mix-row .track { cursor: pointer; touch-action: none; }
+  .mix-row .track::after { content: ''; position: absolute; inset: -13px -4px; }
+  .mix-bars.paused i { animation-play-state: paused; opacity: .3; }
 
   /* ============ 夜间记录 ============ */
   .night { background: #05070f; }
@@ -402,14 +405,14 @@
         <div class="back" onclick="go('home')">‹</div>
         <div class="scroll pad-top">
           <div class="h2 mt16" style="text-align:center">助眠音景</div>
-          <div class="tiny mt8" style="text-align:center">锁屏与后台都不会断</div>
+          <div class="tiny mt8" style="text-align:center">真实合成音景 · 息屏后由系统决定是否继续（装到主屏更稳）</div>
 
           <div class="player-art mt24"><div style="font-size:52px">🌧</div></div>
           <div class="mix-bars mt24" id="mixBars"></div>
 
           <div class="mt24" style="text-align:center">
             <div class="h1" style="font-size:19px">雨落屋檐 + 低频钢琴</div>
-            <div class="tiny mt8">已播放 <span id="playClock">00:00</span> · 音量 42%</div>
+            <div class="tiny mt8">已播放 <span id="playClock">00:00</span> · 音量 <span id="volLabel">42%</span> · <span id="audioState">音景已开启</span></div>
           </div>
 
           <!-- 入睡自动停（核心） -->
@@ -424,17 +427,18 @@
           </div>
 
           <div class="between mt20">
-            <button class="btn ghost" style="width:44%" onclick="go('home')">暂停</button>
+            <button class="btn ghost" style="width:44%" onclick="togglePause(this)" id="pauseBtn">暂停</button>
             <button class="btn primary" style="width:52%" onclick="simulateSleep()" id="simBtn">模拟入睡 ▸</button>
           </div>
 
           <div class="mt24">
             <div class="h2">混音</div>
             <div class="mixer mt12">
-              <div class="mix-row"><div class="between"><b>雨声</b><span class="tiny">58%</span></div><div class="track"><div class="fill" style="width:58%"></div></div></div>
-              <div class="mix-row"><div class="between"><b>低频钢琴</b><span class="tiny">34%</span></div><div class="track"><div class="fill" style="width:34%"></div></div></div>
-              <div class="mix-row"><div class="between"><b>粉红噪声</b><span class="tiny">22%</span></div><div class="track"><div class="fill" style="width:22%"></div></div></div>
+              <div class="mix-row" data-track="rain"><div class="between"><b>雨声</b><span class="tiny" data-val>58%</span></div><div class="track"><div class="fill" style="width:58%"></div></div></div>
+              <div class="mix-row" data-track="piano"><div class="between"><b>低频钢琴</b><span class="tiny" data-val>34%</span></div><div class="track"><div class="fill" style="width:34%"></div></div></div>
+              <div class="mix-row" data-track="pink"><div class="between"><b>粉红噪声</b><span class="tiny" data-val>22%</span></div><div class="track"><div class="fill" style="width:22%"></div></div></div>
             </div>
+            <div class="tiny mt12">左右拖动圆条即可实时调整三条轨的音量。</div>
           </div>
           <div class="pad-bot"></div>
         </div>
@@ -739,6 +743,10 @@ function syncTabs() {
 
 function go(id) {
   if (!SCREENS.includes(id)) return;
+  if (cur === 'player' && id !== 'player') {          // 离开播放器：计时停止 + 真淡出
+    haltClock();
+    if (AUDIO.ctx && AUDIO.active) fadeOutAudio(1.2);
+  }
   document.querySelectorAll('.screen').forEach(s => s.classList.toggle('active', s.id === 's-' + id));
   cur = id;
   if (id === 'report') { reportRead = true; buildTabs(); }
@@ -762,20 +770,196 @@ function tickClock(base) {
   }, 60000);
 }
 
-/* ============ 播放器：计时 + 波形 ============ */
-let playTimer = null, playSec = 0;
-function startPlayClock() {
-  if (playTimer) return;
-  playTimer = setInterval(() => {
-    playSec++;
-    const m = String(Math.floor(playSec / 60)).padStart(2, '0'), s = String(playSec % 60).padStart(2, '0');
-    document.getElementById('playClock').textContent = m + ':' + s;
-  }, 1000);
+/* ============ 播放器：真实助眠音景（Web Audio 纯合成，不需要音频文件） ============ */
+const AUDIO = {
+  ctx: null, master: null, analyser: null, gains: {}, srcs: [],
+  levels: { rain: .58, piano: .34, pink: .22 },   // 三条轨的当前音量（对应混音器）
+  vol: .42,                                       // 总音量，对应界面的“音量 42%”
+  active: false, paused: false
+};
+let barEls = [], barRAF = 0, pianoTimer = null;
+const PENTA = [110, 130.81, 146.83, 164.81, 196, 220, 246.94];   // A2 起的五声音阶
+
+function audioSupported() { return !!(window.AudioContext || window.webkitAudioContext); }
+
+function ensureAudio() {
+  if (AUDIO.ctx) return AUDIO.ctx;
+  const AC = window.AudioContext || window.webkitAudioContext;
+  if (!AC) return null;
+  const ctx = new AC();
+  AUDIO.ctx = ctx;
+
+  // 总线：master → analyser → 扬声器
+  AUDIO.master = ctx.createGain();
+  AUDIO.master.gain.value = 0;
+  AUDIO.analyser = ctx.createAnalyser();
+  AUDIO.analyser.fftSize = 64;
+  AUDIO.analyser.smoothingTimeConstant = .72;
+  AUDIO.master.connect(AUDIO.analyser);
+  AUDIO.analyser.connect(ctx.destination);
+
+  // 噪声缓冲：白噪 + 粉红噪声（各 3 秒，循环播放）
+  const n = Math.floor(ctx.sampleRate * 3);
+  const white = ctx.createBuffer(1, n, ctx.sampleRate), w = white.getChannelData(0);
+  for (let i = 0; i < n; i++) w[i] = Math.random() * 2 - 1;
+  const pink = ctx.createBuffer(1, n, ctx.sampleRate), p = pink.getChannelData(0);
+  let b0 = 0, b1 = 0, b2 = 0, b3 = 0, b4 = 0, b5 = 0, b6 = 0;   // Paul Kellet 粉噪滤波
+  for (let i = 0; i < n; i++) {
+    const x = w[i];
+    b0 = .99886 * b0 + x * .0555179; b1 = .99332 * b1 + x * .0750759; b2 = .96900 * b2 + x * .1538520;
+    b3 = .86650 * b3 + x * .3104856; b4 = .55000 * b4 + x * .5329522; b5 = -.7616 * b5 - x * .0168980;
+    p[i] = (b0 + b1 + b2 + b3 + b4 + b5 + b6 + x * .5362) * .11; b6 = x * .115926;
+  }
+  AUDIO.white = white; AUDIO.pink = pink;
+
+  // 三条轨各挂一个增益节点
+  ['rain', 'piano', 'pink'].forEach(k => {
+    const g = ctx.createGain(); g.gain.value = AUDIO.levels[k];
+    g.connect(AUDIO.master); AUDIO.gains[k] = g;
+  });
+
+  // ① 雨声 = 白噪 → 高通 → 低通（截止频率被极慢 LFO 揉动，听感像忽大忽小的雨）
+  const rs = ctx.createBufferSource(); rs.buffer = white; rs.loop = true;
+  const rhp = ctx.createBiquadFilter(); rhp.type = 'highpass'; rhp.frequency.value = 160;
+  const rlp = ctx.createBiquadFilter(); rlp.type = 'lowpass'; rlp.frequency.value = 1500; rlp.Q.value = .5;
+  const lfo = ctx.createOscillator(); lfo.frequency.value = .07;
+  const lfoAmt = ctx.createGain(); lfoAmt.gain.value = 420;
+  lfo.connect(lfoAmt); lfoAmt.connect(rlp.frequency);
+  rs.connect(rhp); rhp.connect(rlp); rlp.connect(AUDIO.gains.rain);
+  rs.start(); lfo.start(); AUDIO.srcs.push(rs, lfo);
+
+  // ② 粉红噪声 = 粉噪 → 低通
+  const ps = ctx.createBufferSource(); ps.buffer = pink; ps.loop = true;
+  const plp = ctx.createBiquadFilter(); plp.type = 'lowpass'; plp.frequency.value = 900;
+  ps.connect(plp); plp.connect(AUDIO.gains.pink);
+  ps.start(); AUDIO.srcs.push(ps);
+
+  return ctx;
 }
+
+// 低频钢琴：随机慢音符，慢起音 + 长衰减
+function pianoNote(t, freq) {
+  const ctx = AUDIO.ctx, out = AUDIO.gains.piano;
+  const o1 = ctx.createOscillator(); o1.type = 'sine'; o1.frequency.value = freq;
+  const o2 = ctx.createOscillator(); o2.type = 'sine'; o2.frequency.value = freq * 2.004;   // 轻微失谐
+  const o2g = ctx.createGain(); o2g.gain.value = .2;
+  const env = ctx.createGain();
+  env.gain.setValueAtTime(.0001, t);
+  env.gain.linearRampToValueAtTime(.9, t + .7);
+  env.gain.exponentialRampToValueAtTime(.0008, t + 4.6);
+  o1.connect(env); o2.connect(o2g); o2g.connect(env); env.connect(out);
+  o1.start(t); o2.start(t); o1.stop(t + 4.8); o2.stop(t + 4.8);
+}
+function schedulePiano() {
+  if (!AUDIO.active || AUDIO.paused || !AUDIO.ctx) { pianoTimer = null; return; }
+  pianoNote(AUDIO.ctx.currentTime + .05, PENTA[Math.floor(Math.random() * PENTA.length)]);
+  pianoTimer = setTimeout(schedulePiano, 2600 + Math.random() * 2800);
+}
+
+function startAudio() {
+  const ctx = ensureAudio();
+  if (!ctx) { setAudioState('此设备不支持音景'); return false; }
+  if (ctx.state === 'suspended') ctx.resume();
+  AUDIO.active = true; AUDIO.paused = false;
+  const t = ctx.currentTime, g = AUDIO.master.gain;
+  g.cancelScheduledValues(t); g.setValueAtTime(g.value, t);
+  g.linearRampToValueAtTime(AUDIO.vol, t + 2.5);       // 2.5 秒淡入，不突兀
+  if (!pianoTimer) schedulePiano();
+  startBars(); setAudioState('音景已开启');
+  return true;
+}
+function pauseAudio() {
+  if (!AUDIO.ctx) return;
+  AUDIO.paused = true;
+  if (pianoTimer) { clearTimeout(pianoTimer); pianoTimer = null; }
+  AUDIO.ctx.suspend(); stopBars(); setAudioState('已暂停');
+}
+function resumeAudio() {
+  if (!AUDIO.ctx) { startAudio(); return; }
+  AUDIO.active = true; AUDIO.paused = false;
+  AUDIO.ctx.resume();
+  if (!pianoTimer) schedulePiano();
+  startBars(); setAudioState('音景已开启');
+}
+// 真淡出：把总线音量在 sec 秒内线性拉到 0，而不是“啪”一下静音
+function fadeOutAudio(sec) {
+  const ctx = AUDIO.ctx; if (!ctx) return;
+  AUDIO.active = false;
+  if (pianoTimer) { clearTimeout(pianoTimer); pianoTimer = null; }
+  const t = ctx.currentTime, g = AUDIO.master.gain;
+  g.cancelScheduledValues(t); g.setValueAtTime(g.value, t);
+  g.linearRampToValueAtTime(.0001, t + sec);
+  setTimeout(() => { if (!AUDIO.active && AUDIO.ctx) AUDIO.ctx.suspend(); stopBars(); }, sec * 1000 + 150);
+}
+function setAudioState(txt) { const el = document.getElementById('audioState'); if (el) el.textContent = txt; }
+
+/* 混音器：左右拖动圆条，实时改该轨音量 */
+function bindMixer() {
+  document.querySelectorAll('#s-player .mix-row').forEach(row => {
+    const key = row.dataset.track;
+    const track = row.querySelector('.track'), fill = row.querySelector('.fill'), val = row.querySelector('[data-val]');
+    let dragging = false;
+    const apply = x => {
+      const r = track.getBoundingClientRect();
+      const ratio = Math.max(0, Math.min(1, (x - r.left) / r.width));
+      fill.style.width = Math.round(ratio * 100) + '%';
+      if (val) val.textContent = Math.round(ratio * 100) + '%';
+      AUDIO.levels[key] = ratio;
+      if (AUDIO.gains[key]) AUDIO.gains[key].gain.setTargetAtTime(ratio, AUDIO.ctx.currentTime, .04);
+    };
+    const at = e => (e.touches && e.touches[0] ? e.touches[0].clientX : e.clientX);
+    track.addEventListener('pointerdown', e => { dragging = true; apply(at(e)); });
+    track.addEventListener('pointermove', e => { if (dragging) apply(at(e)); });
+    window.addEventListener('pointerup', () => { dragging = false; });
+    window.addEventListener('pointercancel', () => { dragging = false; });
+  });
+}
+
+/* 频谱条：跟着真实声音起伏 */
+function startBars() {
+  const box = document.getElementById('mixBars'); if (box) box.classList.remove('paused');
+  if (barRAF || !AUDIO.analyser) return;
+  const data = new Uint8Array(AUDIO.analyser.frequencyBinCount);
+  const loop = () => {
+    if (!AUDIO.analyser || AUDIO.paused || !AUDIO.active) { barRAF = 0; return; }
+    AUDIO.analyser.getByteFrequencyData(data);
+    barEls.forEach((el, i) => {
+      const v = data[Math.min(data.length - 1, Math.floor(i * data.length / barEls.length))] / 255;
+      el.style.animation = 'none';
+      el.style.height = (10 + v * 88).toFixed(0) + '%';
+      el.style.opacity = (.35 + v * .65).toFixed(2);
+    });
+    barRAF = requestAnimationFrame(loop);
+  };
+  barRAF = requestAnimationFrame(loop);
+}
+function stopBars() {
+  if (barRAF) { cancelAnimationFrame(barRAF); barRAF = 0; }
+  const box = document.getElementById('mixBars'); if (box) box.classList.add('paused');
+  barEls.forEach(el => { el.style.animation = ''; el.style.height = ''; el.style.opacity = ''; });
+}
+
+/* 播放计时 */
+let playTimer = null, playSec = 0;
+function paintClock() {
+  const m = String(Math.floor(playSec / 60)).padStart(2, '0'), s = String(playSec % 60).padStart(2, '0');
+  document.getElementById('playClock').textContent = m + ':' + s;
+}
+function runClock() { if (!playTimer) playTimer = setInterval(() => { playSec++; paintClock(); }, 1000); }
+function haltClock() { if (playTimer) { clearInterval(playTimer); playTimer = null; } }
+
+function startPlayClock() { startAudio(); runClock(); }
+
+function togglePause(btn) {
+  if (AUDIO.paused || !AUDIO.ctx) { resumeAudio(); runClock(); btn.textContent = '暂停'; }
+  else { pauseAudio(); haltClock(); btn.textContent = '继续'; }
+}
+
 function buildMixBars() {
   const box = document.getElementById('mixBars');
   box.innerHTML = Array.from({ length: 26 }, () => '<i></i>').join('');
-  box.querySelectorAll('i').forEach((b, i) => { b.style.animationDelay = (i * 0.07) + 's'; });
+  barEls = [...box.querySelectorAll('i')];
+  barEls.forEach((b, i) => { b.style.animationDelay = (i * .07) + 's'; });
 }
 
 /* ============ 入睡自动停（核心演示） ============ */
@@ -801,13 +985,14 @@ function simulateSleep() {
     state.textContent = '淡出中';
     state.className = 'pill warm';
     bar.style.transition = 'width .4s';
+    fadeOutAudio(3);                    // 演示里压缩到 3 秒；真机是 30 秒
 
     setTimeout(() => {
       title.textContent = '🌙 已停止播放 · 记录继续';
-      desc.innerHTML = '音频在 00:22 完全淡出。屏幕熄灭，但体动与鼾声监听会继续到你醒来——这一晚的耗电预计 6%。';
+      desc.innerHTML = '音频已完全淡出。屏幕熄灭，但体动与鼾声监听会继续到你醒来——这一晚的耗电预计 6%。';
       state.textContent = '已停止';
       state.className = 'pill green';
-      if (playTimer) { clearInterval(playTimer); playTimer = null; }
+      haltClock();
       setTimeout(() => go('night'), 1400);
     }, 1400);
   }, 3700);
@@ -821,7 +1006,7 @@ function resetAutostop() {
   document.getElementById('asBar').style.transition = 'none';
   document.getElementById('asBar').style.width = '0%';
   document.getElementById('simBtn').textContent = '模拟入睡 ▸';
-  if (playTimer) { clearInterval(playTimer); playTimer = null; }
+  haltClock();
 }
 
 /* ============ 夜间记录 ============ */
@@ -888,8 +1073,14 @@ function playSnore(btn) {
 }
 
 /* ============ 开始今晚（MVP 无校准，直接进入助眠） ============ */
+function resetPlayer() {
+  playSec = 0; paintClock();
+  asRunning = false;
+  const pb = document.getElementById('pauseBtn'); if (pb) pb.textContent = '暂停';
+  resetAutostop();
+}
 function startNight() {
-  playSec = 0; asRunning = false; resetAutostop();
+  resetPlayer();
   go('player');
 }
 
@@ -919,7 +1110,7 @@ function initJump() {
     if (k === 'share') return openShare();
     if (k === 'privacy') return openModal('m-privacy');
     if (k === 'delete') return openModal('m-delete');
-    if (k === 'player') { playSec = 0; asRunning = false; resetAutostop(); }
+    if (k === 'player') resetPlayer();
     if (k === 'night') { document.getElementById('nightOrb').textContent = '🌙'; }
     go(k);
   });
@@ -928,11 +1119,19 @@ function initJump() {
 /* ============ 启动 ============ */
 buildTabs();
 buildMixBars();
+bindMixer();
 buildHypno();
 initGoals();
 initJump();
 go('home');
 tickClock(23 * 60 + 41);
+
+/* 音频解锁兜底：iOS 必须在用户手势里才能出声，任何一次点击都尝试恢复 */
+['pointerdown', 'touchstart', 'click'].forEach(ev =>
+  document.addEventListener(ev, () => {
+    if (AUDIO.ctx && AUDIO.ctx.state === 'suspended' && !AUDIO.paused) AUDIO.ctx.resume();
+  }, { passive: true })
+);
 </script>
 <script>
 /* ============ PWA：离线缓存（需 https 或 localhost 才生效） ============ */
