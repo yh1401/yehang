@@ -384,9 +384,9 @@
             <div class="pill grey" onclick="go('report')" style="cursor:pointer">看完整早报 ›</div>
           </div>
           <div class="kpi3 mt12">
-            <div><div class="kpi-num">7<span>h</span>12<span>m</span></div><div class="kpi-lb">在床时长</div></div>
-            <div><div class="kpi-num">1<span>次</span></div><div class="kpi-lb">夜醒</div></div>
-            <div><div class="kpi-num">18<span>分</span></div><div class="kpi-lb">鼾声</div></div>
+            <div><div class="kpi-num" data-fill="bed">7<span>h</span>12<span>m</span></div><div class="kpi-lb">在床时长</div></div>
+            <div><div class="kpi-num" data-fill="wakes">1<span>次</span></div><div class="kpi-lb">夜醒</div></div>
+            <div><div class="kpi-num" data-fill="snore">18<span>分</span></div><div class="kpi-lb">鼾声</div></div>
           </div>
 
           <div class="card mt16">
@@ -482,19 +482,19 @@
           </div>
 
           <div class="hero mt16">
-            <div class="big">7<span style="font-size:22px">h</span>12<span style="font-size:22px">m</span></div>
-            <div class="tiny mt8">在床 8 小时 03 分 · 睡眠效率 89%</div>
+            <div class="big" data-fill="bed">7<span style="font-size:22px">h</span>12<span style="font-size:22px">m</span></div>
+            <div class="tiny mt8" data-fill="eff-desc">在床 8 小时 03 分 · 睡眠效率 89%</div>
           </div>
 
           <div class="kpi3 mt16">
-            <div><div class="kpi-num">21<span>分</span></div><div class="kpi-lb">入睡耗时</div></div>
-            <div><div class="kpi-num">1<span>次</span></div><div class="kpi-lb">夜醒</div></div>
-            <div><div class="kpi-num">18<span>分</span></div><div class="kpi-lb">鼾声</div></div>
+            <div><div class="kpi-num" data-fill="latency">21<span>分</span></div><div class="kpi-lb">入睡耗时</div></div>
+            <div><div class="kpi-num" data-fill="wakes">1<span>次</span></div><div class="kpi-lb">夜醒</div></div>
+            <div><div class="kpi-num" data-fill="snore">18<span>分</span></div><div class="kpi-lb">鼾声</div></div>
           </div>
 
           <!-- 阶段图 -->
           <div class="card mt16">
-            <div class="between"><div class="h2">睡眠阶段（估计）</div><div class="tiny">23:58 — 07:12</div></div>
+            <div class="between"><div class="h2">睡眠阶段（估计）</div><div class="tiny" data-fill="range">23:58 — 07:12</div></div>
             <div class="hypno mt12" id="hypno"></div>
             <div class="legend">
               <span><i style="background:#f0a4a4"></i>清醒</span>
@@ -528,7 +528,7 @@
 
           <!-- 鼾声事件 -->
           <div class="card mt16">
-            <div class="between"><div class="h2">鼾声 / 梦话事件</div><div class="pill grey">3 段</div></div>
+            <div class="between"><div class="h2">鼾声 / 梦话事件</div><div class="pill grey" data-fill="snore-evt">3 段</div></div>
             <div class="mt8">
               <div class="event">
                 <div class="ev-ico">😮‍💨</div>
@@ -675,9 +675,9 @@
           <div class="between"><div class="h1" style="font-size:19px">分享昨晚</div><div class="pill grey" onclick="closeSheet(null,'m-share')" style="cursor:pointer">关闭</div></div>
           <div class="share-card mt16">
             <div class="between"><span class="tiny" style="color:#c3ccea">夜航 · 9月29日</span><span class="tiny">🌙 已记录 12 晚</span></div>
-            <div class="mt16" style="font-size:40px;font-weight:700;letter-spacing:-1.5px">7h12m</div>
+            <div class="mt16" style="font-size:40px;font-weight:700;letter-spacing:-1.5px" data-fill="bed">7h12m</div>
             <div class="tiny mt8">昨晚在床时长</div>
-            <div class="row gap8 mt16">
+            <div class="row gap8 mt16" data-fill="pills">
               <span class="pill">入睡 21 分</span><span class="pill">夜醒 1 次</span><span class="pill">鼾声 18 分</span>
             </div>
             <div class="divider"></div>
@@ -1024,7 +1024,9 @@ const MON = {
   rec: null, chunks: [], clips: [], clip: null,
   snore: 0, snoreAt: 0, audioDb: -100, lowE: 0, motionE: 0,
   quietSince: 0, asleep: false, batt: null, mode: 'demo',
-  timers: [], motionPerm: null, micOk: false, motionOk: false
+  timers: [], motionPerm: null, micOk: false, motionOk: false,
+  // 分期算法（参考睡眠岛）：分钟级 AC → p20 自校准 → Cole-Kripke → 三档分期
+  epochs: [], epochStart: 0, epochAcc: [], baseline: 0
 };
 
 function stopNightWatch() {
@@ -1035,13 +1037,15 @@ function stopNightWatch() {
   if (MON.motionHandler) window.removeEventListener('devicemotion', MON.motionHandler);
   if (MON.clip) { try { MON.clip.pause(); } catch (e) {} MON.clip = null; }
   MON.stream = MON.ctx = MON.an = MON.rec = null;
-  MON.motionHandler = null; MON.mode = 'demo';
+  MON.motionHandler = null;
+  MON.epochAcc = []; MON.epochStart = 0;
 }
 
 async function startNightWatch() {
   stopNightWatch();
   MON.snore = 0; MON.clips = []; MON.samples = []; MON.audioDb = -100;
   MON.motionE = 0; MON.asleep = false; MON.quietSince = Date.now();
+  MON.epochs = []; MON.epochAcc = []; MON.epochStart = 0; MON.baseline = 0;
   setPill('motionState', '启动中…', 'green');
   setPill('dbState', '—', 'green');
   setPill('snoreState', '待触发', 'green');
@@ -1057,7 +1061,9 @@ async function startNightWatch() {
 
 function wakeUp() {
   stopNightWatch();
+  if (MON.mode === 'real' && MON.epochs.length >= 7) { runStaging(); renderReport(); }
   go('report');
+  buildHypno();
   setTimeout(() => document.getElementById('hypno').scrollIntoView({ block: 'center' }), 120);
 }
 
@@ -1108,7 +1114,9 @@ async function startMotion() {
       const a = e.accelerationIncludingGravity || e.acceleration;
       if (!a) return;
       const now = performance.now();
-      if (now - MON.lastMotion < 200) return;        // 限到 ~5Hz，省电
+      // 省电（参考睡眠岛）：清醒时 5Hz，睡着后降到 1Hz
+      const throttle = MON.asleep ? 1000 : 200;
+      if (now - MON.lastMotion < throttle) return;
       MON.lastMotion = now;
       const m = Math.hypot(a.x || 0, a.y || 0, a.z || 0);
       MON.samples.push(m);
@@ -1117,6 +1125,14 @@ async function startMotion() {
       const vs = MON.samples.reduce((s, v) => s + (v - avg) * (v - avg), 0) / MON.samples.length;
       MON.motionE = Math.min(1, Math.sqrt(vs) / 1.6);
       if (MON.motionE > .28) MON.quietSince = Date.now();  // 有体动 → 重新计静默
+      // 分钟级聚合：每 60 秒把 motionE 样本聚合成一个活动计数（AC），供晨间一次性分期
+      MON.epochAcc.push(MON.motionE);
+      if (!MON.epochStart) MON.epochStart = now;
+      if (now - MON.epochStart >= 60000) {
+        const ac = MON.epochAcc.length ? Math.max.apply(null, MON.epochAcc) * 100 : 0;
+        MON.epochs.push({ t: Date.now(), ac: ac, wac: 0, stage: 'wake' });
+        MON.epochAcc = []; MON.epochStart = now;
+      }
     };
     window.addEventListener('devicemotion', MON.motionHandler);
     return true;
@@ -1218,6 +1234,58 @@ async function requestSensors() {
   paintMonitor();
 }
 
+/* ============ 分期算法（参考睡眠岛：p20 自校准 + Cole-Kripke + 三档分期） ============ */
+/* 整夜只存分钟级 AC（最廉价的采集），晨间一次性算完（约百毫秒级），不做实时计算。
+   省电架构：清醒时 5Hz、睡着后 1Hz、分期算法只在 wakeUp() 跑一次。 */
+function runStaging() {
+  const N = MON.epochs.length;
+  if (N < 7) return;                                   // 至少 7 分钟才能跑 7 分钟窗
+  // 1) 逐夜 p20 自校准：取当夜 AC 分布的 p20 分位作为"安静基线"
+  const acs = MON.epochs.map(e => e.ac).sort((a, b) => a - b);
+  MON.baseline = acs[Math.max(0, Math.floor(N * 0.2))] || 1;
+  // 2) Cole-Kripke（1992）：7 分钟对称加权滑动窗口 → 睡/醒分钟判定
+  const W = [.001, .015, .075, 1.0, .075, .015, .001];
+  for (let i = 0; i < N; i++) {
+    let wac = 0;
+    for (let j = -3; j <= 3; j++) { const k = i + j; if (k >= 0 && k < N) wac += W[j + 3] * MON.epochs[k].ac; }
+    MON.epochs[i].wac = wac;
+  }
+  // 3) 三档分期（不输出 REM）：清醒 / 浅睡 / 深睡
+  const TH = MON.baseline * 3;                        // 睡/醒门限 = 安静基线 ×3
+  const DEEP = MON.baseline;                           // 深睡 = 比安静基线还安静（用原始 AC，WAC 被窗口平滑了）
+  MON.epochs.forEach(e => { e.stage = e.wac >= TH ? 'wake' : (e.ac < DEEP ? 'deep' : 'light'); });
+}
+
+/* 用真实分期结果渲染早报（demo 模式不打扰原有假数据） */
+function renderReport() {
+  if (MON.mode !== 'real' || MON.epochs.length < 7) return;
+  const eps = MON.epochs, N = eps.length;
+  let s0 = -1, s1 = -1;
+  for (let i = 0; i < N; i++) if (eps[i].stage !== 'wake') { if (s0 < 0) s0 = i; s1 = i; }
+  const bedMin = N;
+  const sleepMin = eps.filter(e => e.stage !== 'wake').length;
+  let wakes = 0, inW = false;
+  for (let i = (s0 >= 0 ? s0 : 0); i <= s1; i++) {
+    if (eps[i].stage === 'wake') { if (!inW) { wakes++; inW = true; } } else inW = false;
+  }
+  const lat = s0 >= 0 ? s0 : 0;
+  const eff = bedMin ? Math.round(sleepMin / bedMin * 100) : 0;
+  const fH = m => Math.floor(m / 60) + 'h ' + (m % 60) + 'm';
+  const fClk = ts => { const d = new Date(ts); return String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0'); };
+  document.querySelectorAll('[data-fill="bed"]').forEach(el => {
+    if (el.classList.contains('big')) el.innerHTML = Math.floor(bedMin / 60) + '<span style="font-size:22px">h</span>' + (bedMin % 60) + '<span style="font-size:22px">m</span>';
+    else el.textContent = fH(bedMin);
+  });
+  document.querySelectorAll('[data-fill="wakes"]').forEach(el => el.innerHTML = wakes + '<span>次</span>');
+  document.querySelectorAll('[data-fill="snore"]').forEach(el => el.innerHTML = MON.snore + '<span>次</span>');
+  document.querySelectorAll('[data-fill="latency"]').forEach(el => el.innerHTML = lat + '<span>分</span>');
+  document.querySelectorAll('[data-fill="eff-desc"]').forEach(el => el.textContent = '在床 ' + fH(bedMin) + ' · 睡眠效率 ' + eff + '%');
+  document.querySelectorAll('[data-fill="range"]').forEach(el => el.textContent = fClk(eps[0].t) + ' — ' + fClk(eps[N - 1].t));
+  document.querySelectorAll('[data-fill="snore-evt"]').forEach(el => el.textContent = MON.snore + ' 段');
+  const pills = document.querySelector('[data-fill="pills"]');
+  if (pills) pills.innerHTML = '<span class="pill">入睡 ' + lat + ' 分</span><span class="pill">夜醒 ' + wakes + ' 次</span><span class="pill">鼾声 ' + MON.snore + ' 次</span>';
+}
+
 /* ============ 睡眠阶段图（体动法估计） ============ */
 const SEGS = [
   ['wake', 0, 6], ['light', 6, 18], ['light', 24, 30], ['deep', 54, 42], ['light', 96, 26],
@@ -1229,14 +1297,34 @@ const LANE = { wake: 6, light: 44, deep: 82 };
 function buildHypno() {
   const box = document.getElementById('hypno');
   if (!box) return;
+  // 真采集模式且有分期结果：用真实 epoch 生成阶段图
+  if (MON.mode === 'real' && MON.epochs.length >= 7 && MON.epochs.some(e => e.stage)) {
+    const N = MON.epochs.length;
+    const maxAc = Math.max.apply(null, MON.epochs.map(e => e.ac)) || 1;
+    let segHtml = '', barHtml = '', cur = null;
+    MON.epochs.forEach((e, i) => {
+      if (!cur || cur.stage !== e.stage) {
+        if (cur) segHtml += '<div class="seg ' + cur.stage + '" style="left:' + (cur.start / N * 100).toFixed(2) + '%;width:' + (cur.len / N * 100).toFixed(2) + '%;top:' + LANE[cur.stage] + 'px"></div>';
+        cur = { stage: e.stage, start: i, len: 1 };
+      } else cur.len++;
+    });
+    if (cur) segHtml += '<div class="seg ' + cur.stage + '" style="left:' + (cur.start / N * 100).toFixed(2) + '%;width:' + (cur.len / N * 100).toFixed(2) + '%;top:' + LANE[cur.stage] + 'px"></div>';
+    MON.epochs.forEach((e, i) => {
+      const h = 2 + (e.ac / maxAc) * 6;
+      barHtml += '<div style="position:absolute;bottom:0;left:' + (i / N * 100).toFixed(2) + '%;width:' + (1 / N * 100).toFixed(2) + '%;height:' + h.toFixed(1) + 'px;background:rgba(243,201,142,.32);border-radius:1px"></div>';
+    });
+    box.innerHTML = segHtml + barHtml;
+    return;
+  }
+  // demo 模式：用伪随机假数据
   let html = '';
   SEGS.forEach(([st, start, dur]) => {
-    html += `<div class="seg ${st}" style="left:${(start / TOTAL * 100).toFixed(2)}%;width:${(dur / TOTAL * 100).toFixed(2)}%;top:${LANE[st]}px"></div>`;
+    html += '<div class="seg ' + st + '" style="left:' + (start / TOTAL * 100).toFixed(2) + '%;width:' + (dur / TOTAL * 100).toFixed(2) + '%;top:' + LANE[st] + 'px"></div>';
   });
   for (let i = 0; i < 87; i++) {
     const r = Math.abs(Math.sin(i * 12.9898) * 43758.5453) % 1;
     const h = 2 + r * 6;
-    html += `<div style="position:absolute;bottom:0;left:${(i / 87 * 100).toFixed(2)}%;width:1.05%;height:${h.toFixed(1)}px;background:rgba(243,201,142,.32);border-radius:1px"></div>`;
+    html += '<div style="position:absolute;bottom:0;left:' + (i / 87 * 100).toFixed(2) + '%;width:1.05%;height:' + h.toFixed(1) + 'px;background:rgba(243,201,142,.32);border-radius:1px"></div>';
   }
   box.innerHTML = html;
 }
