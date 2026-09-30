@@ -55,11 +55,56 @@ def rain():
 
 
 def ocean():
-    """海浪：更低的低通（布朗噪声感）+ 约 18 秒一波的涨落（60 秒 3.33 波不整周期，这里用 3 波）。"""
+    """海浪：更低的低通（布朗噪声感）+ 约 20 秒一波的涨落（60 秒 3 个整周期，循环点不跳）。"""
     n = int(SR * DUR)
     x = spectral_noise(n, lambda f: hp1(f, 40) * lp1(f, 520) ** 2, SEED + 1)
     t = np.arange(n) / SR
     x *= 0.62 + 0.38 * np.sin(2 * np.pi * 3 * t / DUR)
+    return x
+
+
+def pink():
+    """粉红噪声：能量按 1/f 分布（每倍频程 -3dB），比白噪更"厚"、更适合掩蔽环境噪。
+
+    低频兜底：把 0~1Hz 并入 1Hz，避开 1/sqrt(f) 在直流处的奇异点（spec[0] 随后会被置零）。
+    """
+    n = int(SR * DUR)
+    x = spectral_noise(n, lambda f: hp1(f, 30) * (1.0 / np.sqrt(np.maximum(f, 1.0))), SEED + 3)
+    return x
+
+
+# 低频钢琴用的音高：A2 起的五声音阶，只取低音区，避免听感"吵"
+PENTA = [110.0, 130.81, 146.83, 164.81, 196.0, 220.0, 246.94]
+
+
+def add_note(x, start_sec, freq, amp):
+    """把一个钢琴音环绕累加进 x。
+
+    起音 20ms、指数衰减 tau≈1.3s、总长 6s（尾部已很轻）。
+    索引用 (start + i) % n 环绕：靠近循环末尾的音，其尾音会自然接回开头，
+    所以 60 秒接缝处依然是连续的（不需要交叉淡化）。
+    """
+    n = len(x)
+    ln = int(6.0 * SR)
+    t = np.arange(ln) / SR
+    env = (1.0 - np.exp(-t / 0.02)) * np.exp(-t / 1.3)
+    tone = np.sin(2 * np.pi * freq * t) + 0.35 * np.sin(2 * np.pi * freq * 2.004 * t)
+    idx = (int(start_sec * SR) + np.arange(ln)) % n
+    x[idx] += amp * env * tone
+
+
+def piano():
+    """低频钢琴：60 秒内散布 14 个左右五声音阶低音，间隔 2.6~5.4 秒，偶尔两音叠置。"""
+    n = int(SR * DUR)
+    rng = np.random.default_rng(SEED + 2)
+    x = np.zeros(n)
+    pos = 0.4
+    while pos < DUR:
+        freq = PENTA[rng.integers(0, len(PENTA))]
+        add_note(x, pos, freq, amp=0.5)
+        if rng.random() < 0.28:                       # 偶尔叠一个高八度的泛音点缀
+            add_note(x, pos + 0.06, freq * 2, amp=0.16)
+        pos += rng.uniform(2.6, 5.4)
     return x
 
 
@@ -81,7 +126,7 @@ def write_wav(path, x):
     return path.stat().st_size
 
 
-BUILDERS = {"rain": rain, "ocean": ocean}
+BUILDERS = {"rain": rain, "ocean": ocean, "piano": piano, "pink": pink}
 
 
 def main():

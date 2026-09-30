@@ -1,11 +1,14 @@
 /* 夜航 PWA Service Worker —— 缓存优先，离线也能打开 */
-const CACHE = 'yehang-v6';
+const CACHE = 'yehang-v7';
 const ASSETS = [
   './',
   './index.html',
   './mvp.html',
   './manifest.webmanifest',
   './audio/rain-loop.wav',
+  './audio/ocean-loop.wav',
+  './audio/piano-loop.wav',
+  './audio/pink-loop.wav',
   './icon-192.png',
   './icon-512.png',
   './apple-touch-icon.png',
