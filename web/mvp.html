@@ -150,6 +150,18 @@
   .mix-row .track::after { content: ''; position: absolute; inset: -13px -4px; }
   .mix-bars.paused i { animation-play-state: paused; opacity: .3; }
 
+  /* 两种模式互斥：mix=桌面/安卓四轨混音，scape=iOS 预混音景（.volume 只读，音量交给侧边键） */
+  .mode-mix .iosOnly { display: none !important; }
+  .mode-scape .mixOnly { display: none !important; }
+  .scape-item { border-radius: 16px; padding: 12px 14px; background: rgba(255,255,255,.05);
+    border: 1px solid rgba(255,255,255,.08); cursor: pointer; transition: background .18s, border-color .18s; }
+  .scape-item + .scape-item { margin-top: 9px; }
+  .scape-item b { font-weight: 600; font-size: 13px; color: #c3ccea; }
+  .scape-item.on { background: rgba(243,201,142,.13); border-color: rgba(243,201,142,.42); }
+  .scape-item.on b { color: #f3c98e; }
+  .timer-pill { cursor: pointer; padding: 8px 14px; font-size: 12px; border: 1px solid transparent; }
+  .timer-pill.on { background: rgba(243,201,142,.18); color: #f3c98e; border-color: rgba(243,201,142,.4); }
+
   /* ============ 夜间记录 ============ */
   .night { background: #05070f; }
   .night-center { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 22px; }
@@ -406,18 +418,27 @@
         <div class="back" onclick="go('home')">‹</div>
         <div class="scroll pad-top">
           <div class="h2 mt16" style="text-align:center">助眠音景</div>
-          <div class="tiny mt8" style="text-align:center">四条音景都是音频文件，锁屏 / 息屏后仍会继续播放</div>
+          <div class="tiny mt8" style="text-align:center" id="playerLede">四条音轨都是音频文件，锁屏 / 息屏后仍会继续播放，可自由混音</div>
 
           <div class="player-art mt24"><div style="font-size:52px">🌧</div></div>
           <div class="mix-bars mt24" id="mixBars"></div>
 
           <div class="mt24" style="text-align:center">
-            <div class="h1" style="font-size:19px">雨落屋檐 · 海浪 · 低频钢琴 · 粉噪</div>
-            <div class="tiny mt8">已播放 <span id="playClock">00:00</span> · 音量 <span id="volLabel">42%</span> · <span id="audioState">音景已开启</span></div>
+            <div class="h1" style="font-size:19px" id="playerTitle">雨落屋檐 · 海浪 · 低频钢琴 · 粉噪</div>
+            <div class="tiny mt8">已播放 <span id="playClock">00:00</span><span id="volPart"> · 音量 <span id="volLabel">42%</span></span> · <span id="audioState">音景已开启</span></div>
           </div>
 
-          <!-- 入睡自动停（核心） -->
-          <div class="autostop mt20" id="autostopBox">
+          <!-- iOS 模式：选音景 + 播放到。音量交给物理侧边键，淡出烘在音频文件里 -->
+          <div class="iosOnly mt24" id="scapeBox">
+            <div class="h2">选音景</div>
+            <div class="mt12" id="scapeList"></div>
+            <div class="h2 mt20">播放到</div>
+            <div class="row mt12" id="timerList" style="flex-wrap:wrap; gap:8px"></div>
+            <div class="tiny mt8">到点后音量会自己淡出再停止——淡出已烘进音频文件，锁屏、切后台都不会失效。</div>
+          </div>
+
+          <!-- 入睡自动停（核心，桌面 / 安卓） -->
+          <div class="autostop mt20 mixOnly" id="autostopBox">
             <div class="between">
               <div class="st" id="asTitle">🌙 入睡自动停 · 已开启</div>
               <div class="pill green" id="asState">等待入睡</div>
@@ -432,7 +453,7 @@
             <button class="btn primary" style="width:52%" onclick="simulateSleep()" id="simBtn">模拟入睡 ▸</button>
           </div>
 
-          <div class="mt24">
+          <div class="mt24 mixOnly">
             <div class="h2">混音</div>
             <div class="mixer mt12">
               <div class="mix-row" data-track="rain"><div class="between"><b>雨声</b><span class="tiny" data-val>58%</span></div><div class="track"><div class="fill" style="width:58%"></div></div></div>
@@ -721,12 +742,15 @@
   </div>
 </div>
 
-<!-- 四条助眠音景轨：全部走 <audio> 媒体元素，锁屏/后台由系统音频会话接管，四条可同时续播。
+<!-- 助眠音频全部走 <audio> 媒体元素：锁屏 / 后台由系统音频会话接管。
+     src 由 JS 按模式注入——mix（桌面/安卓）用四条单轨自由混音；scape（iOS，.volume 只读）
+     用预混音景单流，音量交给物理侧边键。
      注意：绝不能接进 createMediaElementSource，否则会重新依赖 AudioContext 而被系统挂起。 -->
-<audio id="rainEl"  preload="auto" loop src="./audio/rain-loop.wav"></audio>
-<audio id="oceanEl" preload="auto" loop src="./audio/ocean-loop.wav"></audio>
-<audio id="pianoEl" preload="auto" loop src="./audio/piano-loop.wav"></audio>
-<audio id="pinkEl"  preload="auto" loop src="./audio/pink-loop.wav"></audio>
+<audio id="rainEl"  preload="none"></audio>
+<audio id="oceanEl" preload="none"></audio>
+<audio id="pianoEl" preload="none"></audio>
+<audio id="pinkEl"  preload="none"></audio>
+<audio id="scapeEl" preload="none"></audio>
 
 <script>
 /* ============ 屏幕与导航 ============ */
@@ -787,35 +811,57 @@ function tickClock(base) {
 }
 
 /* ============ 播放器：助眠音景 ============
-   四条轨全部是 <audio> 媒体元素（audio/*-loop.wav），不再使用 Web Audio。
+   全部走 <audio> 媒体元素，不再使用 Web Audio。
    原因：实时合成（AudioContext）在 iOS 锁屏/切后台时必然被系统挂起（JS 线程停摆），
-   只有媒体元素才拿到 playback 音频会话，能后台续播并接管锁屏控制条。 */
+   只有媒体元素才拿到 playback 音频会话，能后台续播并接管锁屏控制条。
+
+   两种模式（按 .volume 是否可写自动判定）：
+   · mix   —— 桌面 / 安卓：四条单轨自由混音，实时改 el.volume，可做真淡出。
+   · scape —— iOS：el.volume 只读（读回恒为 1），改成「选一段预混音景 + 选播放到几时」。
+              音量交给物理侧边键；「到点淡出」烘在音频文件末尾，锁屏后 JS 全停也照样生效。 */
 const TRACKS = ['rain', 'ocean', 'piano', 'pink'];
+const TOTAL_MIN = 60;                                   // 长文件总时长，也是「播放到」的上限档
+const SCAPES = [
+  { id: 'rainpiano', ico: '🌧', name: '雨落屋檐 · 低频钢琴', desc: '暖雨 + 低频钢琴，最经典的助眠组合' },
+  { id: 'ocean',     ico: '🌊', name: '海浪',               desc: '缓慢涨落的浪声，掩蔽环境噪音' },
+  { id: 'rain',      ico: '💧', name: '纯雨声',             desc: '干净的雨声，不含音乐' },
+  { id: 'pink',      ico: '📻', name: '粉红噪声',           desc: '能量偏低的宽频噪声，掩蔽性最强' }
+];
+const TIMERS = [
+  { id: 'manual', name: '直到手动停止', min: 0 },
+  { id: 'm30',    name: '30 分钟',      min: 30 },
+  { id: 'm60',    name: '60 分钟',      min: 60 }
+];
 const AUDIO = {
   levels: { rain: .58, ocean: .45, piano: .34, pink: .22 },   // 四条轨的当前音量（对应混音器）
   vol: .42,                                       // 总音量，对应界面的“音量 42%”
   active: false, paused: false,                   // active=音景是否在播；paused=是否被用户暂停
-  els: {},                                        // key -> HTMLAudioElement
+  els: {},                                        // key -> HTMLAudioElement（含 'scape'）
   fades: {},                                      // key -> 淡入淡出系数 0~1
   rampTimer: null,
-  elVolOk: false                                  // 元素 .volume 是否真的可写（iOS Safari 可写，部分旧 WKWebView 只读）
+  /* iOS（含 Safari 与 WKWebView）上 el.volume 不可写，读回恒为 1 —— Apple 官方文档明确说明，
+     所以这是一次真实的“能不能写音量”探测，结果决定走 mix 还是 scape。 */
+  elVolOk: false,
+  mode: 'mix', scape: SCAPES[0].id, timer: 'manual', pendingSeek: 0
 };
 let barEls = [];
 
-/* 收集四条 <audio>，并探测 .volume 可写性 */
+/* 收集 <audio> 元素，并探测 .volume 可写性 */
 function initAudioEls() {
   TRACKS.forEach(k => {
     const el = document.getElementById(k + 'El');
     if (!el) return;
-    el.loop = true;
     AUDIO.els[k] = el;
     if (AUDIO.fades[k] == null) AUDIO.fades[k] = 0;
-    el.addEventListener('error', () => setAudioState('音频加载失败'));
-    el.addEventListener('ended', () => {                 // 兜底：个别环境不认 loop
-      try { el.currentTime = 0; } catch (e) {}
-      const p = el.play(); if (p && p.catch) p.catch(() => {});
-    });
   });
+  const sc = document.getElementById('scapeEl');
+  if (sc) {
+    AUDIO.els.scape = sc;
+    sc.addEventListener('error', () => setAudioState('音景加载失败'));
+    sc.addEventListener('loadedmetadata', applyPendingSeek);   // iOS 上 src 后立刻 seek 可能被忽略，这里补一次
+    sc.addEventListener('canplay', applyPendingSeek);
+    sc.addEventListener('ended', onScapeEnded);                // 长文件放完 = 到点，锁屏态也只有它靠得住
+  }
   const probe = AUDIO.els.rain;
   if (probe) {
     try {
@@ -823,6 +869,36 @@ function initAudioEls() {
       AUDIO.elVolOk = Math.abs(probe.volume - .5) < .01;
       probe.volume = prev;
     } catch (e) { AUDIO.elVolOk = false; }
+  }
+}
+
+/* 模式判定：?mode=scape|mix 可强制覆盖（便于在桌面上自测 iOS 分支） */
+function pickMode() {
+  const f = new URLSearchParams(location.search).get('mode');
+  if (f === 'mix' || f === 'scape') return f;
+  return AUDIO.elVolOk ? 'mix' : 'scape';
+}
+function applyMode() {
+  AUDIO.mode = pickMode();
+  const scape = AUDIO.mode === 'scape';
+  document.body.classList.toggle('mode-scape', scape);
+  document.body.classList.toggle('mode-mix', !scape);
+  const lede = document.getElementById('playerLede'), title = document.getElementById('playerTitle');
+  const volPart = document.getElementById('volPart');
+  if (scape) {
+    if (lede) lede.textContent = '选一段音景，锁屏 / 熄屏后会继续播放；到点由音频自己淡出停止';
+    if (title) title.textContent = '雨落屋檐 · 海浪 · 纯雨声 · 粉红噪声';
+    if (volPart) volPart.style.display = 'none';     // iOS 音量只能在侧边键上调
+  } else {
+    TRACKS.forEach(k => {                            // 只有 mix 模式才去加载四条单轨，省掉 iOS 上无谓的 10MB
+      const el = AUDIO.els[k]; if (!el || el.getAttribute('src')) return;
+      el.loop = true; el.preload = 'auto'; el.src = './audio/' + k + '-loop.wav'; el.load();
+      el.addEventListener('error', () => setAudioState('音频加载失败'));
+      el.addEventListener('ended', () => {           // 兜底：个别环境不认 loop
+        try { el.currentTime = 0; } catch (e) {}
+        const p = el.play(); if (p && p.catch) p.catch(() => {});
+      });
+    });
   }
 }
 
@@ -858,13 +934,80 @@ function playAll(reset) {
 }
 function pauseAll() { TRACKS.forEach(k => { const el = AUDIO.els[k]; if (el) { try { el.pause(); } catch (e) {} } }); }
 
+/* ---------- scape 模式：单条预混音景（iOS） ----------
+   音量不可调 → 一切靠「选哪段」和「播多久」，淡出由音频文件自己完成。 */
+function scapeSrc() {
+  return AUDIO.timer === 'manual'
+    ? './audio/sc-' + AUDIO.scape + '-loop.m4a'          // 120s 无缝循环，一直播
+    : './audio/sc-' + AUDIO.scape + '-full.m4a';         // 60 分钟，末尾自带 45s 淡出
+}
+/* 「播放到 30 分钟」= 从这份 60 分钟文件的 30:00 起播，淡出正好落在 60:00 —— 一份文件撑多档 */
+function scapeSeek() {
+  const t = TIMERS.find(x => x.id === AUDIO.timer);
+  return (!t || t.min <= 0) ? 0 : (TOTAL_MIN - t.min) * 60;
+}
+function applyPendingSeek() {
+  const el = AUDIO.els.scape; if (!el || !AUDIO.pendingSeek) return;
+  const s = AUDIO.pendingSeek;
+  if (Math.abs(el.currentTime - s) > 1.5) { try { el.currentTime = s; } catch (e) {} }
+  else AUDIO.pendingSeek = 0;
+}
+function loadScape(play) {
+  const el = AUDIO.els.scape; if (!el) return;
+  const src = scapeSrc(), seek = scapeSeek();
+  el.loop = AUDIO.timer === 'manual';
+  if (el.getAttribute('src') !== src || el.error) {      // 换了音景 / 循环↔长文件：重新加载
+    AUDIO.pendingSeek = seek; el.preload = 'auto'; el.src = src; el.load(); applyPendingSeek();
+  } else {
+    try { el.currentTime = seek; } catch (e) {}          // 只换时长档：就地跳转
+  }
+  if (play) playScape();
+}
+function playScape() { const el = AUDIO.els.scape; if (!el) return; const p = el.play(); if (p && p.catch) p.catch(() => {}); }
+function pauseScape() { const el = AUDIO.els.scape; if (el) { try { el.pause(); } catch (e) {} } }
+function onScapeEnded() {                                // 长文件自然放完 = 定时到点
+  AUDIO.active = false;
+  stopBars(); haltClock(); syncPauseBtn(); setSessionState('none');
+  setAudioState('已按设定时长停止 · 记录继续');
+}
+
+function selectScape(id) {
+  AUDIO.scape = id;
+  document.querySelectorAll('#scapeList .scape-item').forEach(n => n.classList.toggle('on', n.dataset.scape === id));
+  const s = SCAPES.find(x => x.id === id);
+  const art = document.querySelector('#s-player .player-art div');
+  if (s && art) art.textContent = s.ico;
+  if (AUDIO.active) loadScape(true);
+}
+function selectTimer(id) {
+  AUDIO.timer = id;
+  document.querySelectorAll('#timerList .timer-pill').forEach(n => n.classList.toggle('on', n.dataset.timer === id));
+  if (AUDIO.active) loadScape(true);
+}
+function buildScapeUI() {
+  const list = document.getElementById('scapeList'), timers = document.getElementById('timerList');
+  if (list) {
+    list.innerHTML = SCAPES.map(s =>
+      `<div class="scape-item" data-scape="${s.id}"><b>${s.ico} ${s.name}</b><div class="tiny mt8">${s.desc}</div></div>`).join('');
+    list.querySelectorAll('.scape-item').forEach(n => n.onclick = () => selectScape(n.dataset.scape));
+  }
+  if (timers) {
+    timers.innerHTML = TIMERS.map(t =>
+      `<div class="pill grey timer-pill${t.id === AUDIO.timer ? ' on' : ''}" data-timer="${t.id}">${t.name}</div>`).join('');
+    timers.querySelectorAll('.timer-pill').forEach(n => n.onclick = () => selectTimer(n.dataset.timer));
+  }
+  selectScape(AUDIO.scape);
+}
+
 function syncPauseBtn() { const b = document.getElementById('pauseBtn'); if (b) b.textContent = (AUDIO.paused || !AUDIO.active) ? '继续' : '暂停'; }
 
 /* 锁屏控制条：标题 + 播放/暂停按钮 */
 function setupMediaSession() {
   if (!('mediaSession' in navigator)) return;
+  const s = SCAPES.find(x => x.id === AUDIO.scape);
+  const title = (AUDIO.mode === 'scape' && s) ? s.name : '雨落屋檐 · 海浪 · 低频钢琴';
   try {
-    navigator.mediaSession.metadata = new MediaMetadata({ title: '雨落屋檐 · 海浪 · 低频钢琴', artist: '夜航 · 助眠音景', album: '夜航' });
+    navigator.mediaSession.metadata = new MediaMetadata({ title: title, artist: '夜航 · 助眠音景', album: '夜航' });
   } catch (e) {}
   const set = (a, h) => { try { navigator.mediaSession.setActionHandler(a, h); } catch (e) {} };
   set('play', () => resumeAudio());
@@ -874,36 +1017,53 @@ function setupMediaSession() {
 function setSessionState(s) { try { if ('mediaSession' in navigator) navigator.mediaSession.playbackState = s; } catch (e) {} }
 
 function startAudio() {
-  if (!AUDIO.els.rain) initAudioEls();
-  if (!AUDIO.els.rain) { setAudioState('音景资源加载失败'); return false; }
+  const scape = AUDIO.mode === 'scape';
+  if (scape ? !AUDIO.els.scape : !AUDIO.els.rain) initAudioEls();
+  if (scape ? !AUDIO.els.scape : !AUDIO.els.rain) { setAudioState('音景资源加载失败'); return false; }
   const first = !AUDIO.active;
   AUDIO.active = true; AUDIO.paused = false;
-  playAll(first);                                      // 四条一起播；首次从头开始
-  rampFade(1, 2.5);                                    // 2.5 秒淡入，不突兀
+  if (scape) {
+    if (first) loadScape(true);                        // 首次从 0 起播；选「30 分钟」则从 30:00 起播
+    else playScape();                                  // 已在播：不重置进度，避免来回切页跳回开头
+    setAudioState('音景已开启 · 音量请用侧边键');
+  } else {
+    playAll(first);                                    // 四条一起播；首次从头开始
+    rampFade(1, 2.5);                                  // 2.5 秒淡入，不突兀
+    setAudioState(AUDIO.elVolOk ? '音景已开启' : '音景已开启 · 音量请用侧边键');
+  }
   setupMediaSession(); setSessionState('playing');
-  startBars(); setAudioState(AUDIO.elVolOk ? '音景已开启' : '音景已开启 · 音量请用侧边键');
-  syncPauseBtn();
+  startBars(); syncPauseBtn();
   return true;
 }
 function pauseAudio() {
-  if (!AUDIO.els.rain) return;                         // 音景尚未初始化
+  if (AUDIO.mode !== 'scape' && !AUDIO.els.rain) return;   // 音景尚未初始化
   AUDIO.paused = true;
-  pauseAll();                                          // 先真正停掉，避免 JS 被系统挂起时还在响
-  TRACKS.forEach(k => AUDIO.fades[k] = 0);
+  if (AUDIO.mode === 'scape') {
+    pauseScape();
+  } else {
+    pauseAll();                                        // 先真正停掉，避免 JS 被系统挂起时还在响
+    TRACKS.forEach(k => AUDIO.fades[k] = 0);
+  }
   stopBars(); setSessionState('paused'); setAudioState('已暂停'); syncPauseBtn();
 }
 function resumeAudio() {
   if (!AUDIO.active) { startAudio(); return; }
   AUDIO.active = true; AUDIO.paused = false;
-  playAll(false);
-  rampFade(1, .8);
+  if (AUDIO.mode === 'scape') playScape();
+  else { playAll(false); rampFade(1, .8); }
   startBars(); setSessionState('playing'); setAudioState('音景已开启'); syncPauseBtn();
 }
-// 真淡出：四轨音量在 sec 秒内线性拉到 0（而不是"啪"一下静音），淡完再真正暂停
+/* mix 模式：四轨音量在 sec 秒内线性拉到 0（真淡出，不是"啪"一下静音），淡完再真正暂停。
+   scape 模式（iOS 音量只读）没法用 JS 淡出——可靠的淡出已经烘在长文件末尾，
+   这里只是等 sec 秒后把元素停掉。 */
 function fadeOutAudio(sec) {
   AUDIO.active = false;
+  setSessionState('paused'); setAudioState('已淡出停止 · 记录继续');
+  if (AUDIO.mode === 'scape') {
+    setTimeout(() => { if (!AUDIO.active) { pauseScape(); stopBars(); } }, sec * 1000 + 150);
+    return;
+  }
   rampFade(0, sec);
-  setSessionState('paused');
   setTimeout(() => {
     if (!AUDIO.active) { pauseAll(); stopBars(); }      // 若期间又回到播放器，就不打断
   }, sec * 1000 + 150);
@@ -989,9 +1149,12 @@ function simulateSleep() {
   bar.style.transition = 'width 3.6s linear';
   bar.style.width = '100%';
 
+  const scape = AUDIO.mode === 'scape';
   setTimeout(() => {
     title.textContent = '🌙 音量淡出中';
-    desc.innerHTML = '确认安静通过。音量将在 30 秒内逐级淡出，而不是"啪"一下静音。';
+    desc.innerHTML = scape
+      ? '确认安静通过。iOS 锁屏后脚本会被系统挂起，所以淡出不是由代码执行的——它<b>已烘进音频文件本身</b>，播到结尾会自然淡出并停止。'
+      : '确认安静通过。音量将在 30 秒内逐级淡出，而不是"啪"一下静音。';
     state.textContent = '淡出中';
     state.className = 'pill warm';
     bar.style.transition = 'width .4s';
@@ -1016,6 +1179,7 @@ function resetAutostop() {
   document.getElementById('asBar').style.transition = 'none';
   document.getElementById('asBar').style.width = '0%';
   document.getElementById('simBtn').textContent = '模拟入睡 ▸';
+  document.querySelectorAll('#timerList .timer-pill').forEach(n => n.classList.toggle('on', n.dataset.timer === AUDIO.timer));
   haltClock();
 }
 
@@ -1362,6 +1526,8 @@ function resetPlayer() {
   playSec = 0; paintClock();
   asRunning = false;
   const pb = document.getElementById('pauseBtn'); if (pb) pb.textContent = '暂停';
+  AUDIO.active = false; AUDIO.paused = false; AUDIO.pendingSeek = 0;
+  if (AUDIO.els.scape) { try { AUDIO.els.scape.pause(); } catch (e) {} }
   resetAutostop();
 }
 function startNight() {
@@ -1409,6 +1575,8 @@ function initJump() {
 buildTabs();
 buildMixBars();
 initAudioEls();
+applyMode();
+buildScapeUI();
 bindMixer();
 buildHypno();
 initGoals();
@@ -1419,7 +1587,11 @@ tickClock(23 * 60 + 41);
 /* 音频解锁兜底：iOS 必须在用户手势里才能出声，任何一次点击都尝试续播（仅当应当播放时） */
 ['pointerdown', 'touchstart', 'click'].forEach(ev =>
   document.addEventListener(ev, () => {
-    if (AUDIO.active && !AUDIO.paused) playAll(false);
+    if (!AUDIO.active || AUDIO.paused) return;
+    if (AUDIO.mode === 'scape') {
+      const el = AUDIO.els.scape;
+      if (el && el.paused) playScape();
+    } else playAll(false);
   }, { passive: true })
 );
 </script>
