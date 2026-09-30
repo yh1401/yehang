@@ -1,10 +1,11 @@
 /* 夜航 PWA Service Worker —— 缓存优先，离线也能打开 */
-const CACHE = 'yehang-v5';
+const CACHE = 'yehang-v6';
 const ASSETS = [
   './',
   './index.html',
   './mvp.html',
   './manifest.webmanifest',
+  './audio/rain-loop.wav',
   './icon-192.png',
   './icon-512.png',
   './apple-touch-icon.png',
@@ -14,7 +15,8 @@ const ASSETS = [
 self.addEventListener('install', (e) => {
   e.waitUntil(
     caches.open(CACHE)
-      .then((c) => c.addAll(ASSETS))
+      // 逐个缓存：单个资源失败（如音频未部署）不拖垮整次安装
+      .then((c) => Promise.all(ASSETS.map((u) => c.add(u).catch(() => {}))))
       .then(() => self.skipWaiting())
   );
 });

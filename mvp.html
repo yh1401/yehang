@@ -405,7 +405,7 @@
         <div class="back" onclick="go('home')">‹</div>
         <div class="scroll pad-top">
           <div class="h2 mt16" style="text-align:center">助眠音景</div>
-          <div class="tiny mt8" style="text-align:center">真实合成音景 · 息屏后由系统决定是否继续（装到主屏更稳）</div>
+          <div class="tiny mt8" style="text-align:center">雨声为音频文件，锁屏/后台可继续；海浪 · 钢琴 · 粉噪为实时合成，息屏后会暂停</div>
 
           <div class="player-art mt24"><div style="font-size:52px">🌧</div></div>
           <div class="mix-bars mt24" id="mixBars"></div>
@@ -719,6 +719,11 @@
     </div>
   </div>
 </div>
+
+<!-- 雨声：真实音频文件。锁屏/后台由系统音频会话接管，可继续播放。
+     注意：绝不能接进 createMediaElementSource，否则会重新依赖 AudioContext 而被系统挂起。 -->
+<audio id="rainEl" preload="auto" loop src="./audio/rain-loop.wav"></audio>
+
 <script>
 /* ============ 屏幕与导航 ============ */
 const SCREENS = ['onboard','home','player','night','report','trend','me'];
@@ -777,12 +782,16 @@ function tickClock(base) {
   }, 60000);
 }
 
-/* ============ 播放器：真实助眠音景（Web Audio 纯合成，不需要音频文件） ============ */
+/* ============ 播放器：助眠音景（雨声走音频文件，其余三轨 Web Audio 实时合成） ============ */
 const AUDIO = {
   ctx: null, master: null, analyser: null, gains: {}, srcs: [],
   levels: { rain: .58, ocean: .45, piano: .34, pink: .22 },   // 四条轨的当前音量（对应混音器）
   vol: .42,                                       // 总音量，对应界面的“音量 42%”
-  active: false, paused: false
+  active: false, paused: false,
+  rainEl: null,                                   // 雨声改为 <audio> 媒体元素（锁屏/后台可续播）
+  rainFade: 0,                                    // 雨声淡入淡出系数 0~1
+  rainRampTimer: null,
+  elVolOk: false                                  // 元素 .volume 是否真的可写（iOS Safari 可写，部分旧 WKWebView 只读）
 };
 let barEls = [], barRAF = 0, pianoTimer = null;
 const PENTA = [110, 130.81, 146.83, 164.81, 196, 220, 246.94];   // A2 起的五声音阶
@@ -819,21 +828,13 @@ function ensureAudio() {
   }
   AUDIO.white = white; AUDIO.pink = pink;
 
-  // 四条轨各挂一个增益节点
-  ['rain', 'ocean', 'piano', 'pink'].forEach(k => {
+  // 三条合成轨各挂一个增益节点（雨声已改为 <audio> 媒体元素，不走 Web Audio）
+  ['ocean', 'piano', 'pink'].forEach(k => {
     const g = ctx.createGain(); g.gain.value = AUDIO.levels[k];
     g.connect(AUDIO.master); AUDIO.gains[k] = g;
   });
 
-  // ① 雨声 = 白噪 → 高通 → 低通（截止频率被极慢 LFO 揉动，听感像忽大忽小的雨）
-  const rs = ctx.createBufferSource(); rs.buffer = white; rs.loop = true;
-  const rhp = ctx.createBiquadFilter(); rhp.type = 'highpass'; rhp.frequency.value = 160;
-  const rlp = ctx.createBiquadFilter(); rlp.type = 'lowpass'; rlp.frequency.value = 1500; rlp.Q.value = .5;
-  const lfo = ctx.createOscillator(); lfo.frequency.value = .07;
-  const lfoAmt = ctx.createGain(); lfoAmt.gain.value = 420;
-  lfo.connect(lfoAmt); lfoAmt.connect(rlp.frequency);
-  rs.connect(rhp); rhp.connect(rlp); rlp.connect(AUDIO.gains.rain);
-  rs.start(); lfo.start(); AUDIO.srcs.push(rs, lfo);
+  // ① 雨声：见 #rainEl 媒体元素（锁屏/后台由系统接管，可续播），此处不再实时合成。
 
   // ② 粉红噪声 = 粉噪 → 低通
   const ps = ctx.createBufferSource(); ps.buffer = pink; ps.loop = true;
@@ -882,30 +883,91 @@ function schedulePiano() {
   pianoTimer = setTimeout(schedulePiano, 2600 + Math.random() * 2800);
 }
 
+/* ===== 雨声：走媒体元素，锁屏/后台由系统音频会话接管，可继续播放 ===== */
+function initRainEl() {
+  const el = document.getElementById('rainEl');
+  if (!el) return null;
+  AUDIO.rainEl = el; el.loop = true;
+  // 探测 .volume 是否真的可写（iOS Safari 可写；部分旧 WKWebView 只读，读回恒为 1）
+  try {
+    const prev = el.volume; el.volume = .5;
+    AUDIO.elVolOk = Math.abs(el.volume - .5) < .01;
+    el.volume = prev;
+  } catch (e) { AUDIO.elVolOk = false; }
+  el.addEventListener('error', () => setAudioState('雨声音频加载失败'));
+  el.addEventListener('ended', () => {                   // 兜底：个别环境不认 loop
+    try { el.currentTime = 0; } catch (e) {}
+    const p = el.play(); if (p && p.catch) p.catch(() => {});
+  });
+  return el;
+}
+function setRainVolume(ratio) {
+  const el = AUDIO.rainEl; if (!el) return;
+  const v = Math.max(0, Math.min(1, ratio * AUDIO.vol * AUDIO.rainFade));
+  if (AUDIO.elVolOk) { try { el.volume = v; } catch (e) {} }
+  else { el.muted = v < .02; }                            // 无法调音量时，至少能按需静音
+}
+function rampRainFade(to, sec) {
+  if (AUDIO.rainRampTimer) { clearInterval(AUDIO.rainRampTimer); AUDIO.rainRampTimer = null; }
+  if (!AUDIO.elVolOk) { AUDIO.rainFade = to; setRainVolume(AUDIO.levels.rain); return; }
+  const from = AUDIO.rainFade, t0 = performance.now(), dur = Math.max(60, sec * 1000);
+  AUDIO.rainRampTimer = setInterval(() => {
+    const p = Math.min(1, (performance.now() - t0) / dur);
+    AUDIO.rainFade = from + (to - from) * p;
+    setRainVolume(AUDIO.levels.rain);
+    if (p >= 1) { clearInterval(AUDIO.rainRampTimer); AUDIO.rainRampTimer = null; }
+  }, 50);
+}
+function playRainEl() { const el = AUDIO.rainEl; if (!el) return; if (el.paused) { const p = el.play(); if (p && p.catch) p.catch(() => {}); } }
+function stopRainEl() { if (AUDIO.rainEl) AUDIO.rainEl.pause(); }
+function syncPauseBtn() { const b = document.getElementById('pauseBtn'); if (b) b.textContent = (AUDIO.paused || !AUDIO.active) ? '继续' : '暂停'; }
+
+/* 锁屏控制条：标题 + 播放/暂停按钮 */
+function setupMediaSession() {
+  if (!('mediaSession' in navigator)) return;
+  try {
+    navigator.mediaSession.metadata = new MediaMetadata({ title: '雨落屋檐', artist: '夜航 · 助眠音景', album: '夜航' });
+  } catch (e) {}
+  const set = (a, h) => { try { navigator.mediaSession.setActionHandler(a, h); } catch (e) {} };
+  set('play', () => resumeAudio());
+  set('pause', () => pauseAudio());
+  set('stop', () => fadeOutAudio(2));
+}
+function setSessionState(s) { try { if ('mediaSession' in navigator) navigator.mediaSession.playbackState = s; } catch (e) {} }
+
 function startAudio() {
   const ctx = ensureAudio();
   if (!ctx) { setAudioState('此设备不支持音景'); return false; }
+  const first = !AUDIO.active;
   if (ctx.state === 'suspended') ctx.resume();
   AUDIO.active = true; AUDIO.paused = false;
   const t = ctx.currentTime, g = AUDIO.master.gain;
   g.cancelScheduledValues(t); g.setValueAtTime(g.value, t);
   g.linearRampToValueAtTime(AUDIO.vol, t + 2.5);       // 2.5 秒淡入，不突兀
+  // 雨声：媒体元素播放并淡入（锁屏/后台可继续）
+  if (!AUDIO.rainEl) initRainEl();
+  if (AUDIO.rainEl) { if (first) { try { AUDIO.rainEl.currentTime = 0; } catch (e) {} } playRainEl(); rampRainFade(1, 2.5); }
+  setupMediaSession(); setSessionState('playing');
   if (!pianoTimer) schedulePiano();
-  startBars(); setAudioState('音景已开启');
+  startBars(); setAudioState(AUDIO.elVolOk ? '音景已开启' : '音景已开启 · 音量请用侧边键');
+  syncPauseBtn();
   return true;
 }
 function pauseAudio() {
   if (!AUDIO.ctx) return;
   AUDIO.paused = true;
   if (pianoTimer) { clearTimeout(pianoTimer); pianoTimer = null; }
-  AUDIO.ctx.suspend(); stopBars(); setAudioState('已暂停');
+  stopRainEl(); rampRainFade(0, .15);
+  AUDIO.ctx.suspend(); stopBars(); setSessionState('paused'); setAudioState('已暂停'); syncPauseBtn();
 }
 function resumeAudio() {
   if (!AUDIO.ctx) { startAudio(); return; }
+  if (!AUDIO.rainEl) initRainEl();
   AUDIO.active = true; AUDIO.paused = false;
   AUDIO.ctx.resume();
+  playRainEl(); rampRainFade(1, .8);
   if (!pianoTimer) schedulePiano();
-  startBars(); setAudioState('音景已开启');
+  startBars(); setSessionState('playing'); setAudioState('音景已开启'); syncPauseBtn();
 }
 // 真淡出：把总线音量在 sec 秒内线性拉到 0，而不是“啪”一下静音
 function fadeOutAudio(sec) {
@@ -915,7 +977,12 @@ function fadeOutAudio(sec) {
   const t = ctx.currentTime, g = AUDIO.master.gain;
   g.cancelScheduledValues(t); g.setValueAtTime(g.value, t);
   g.linearRampToValueAtTime(.0001, t + sec);
-  setTimeout(() => { if (!AUDIO.active && AUDIO.ctx) AUDIO.ctx.suspend(); stopBars(); }, sec * 1000 + 150);
+  rampRainFade(0, sec);                                // 雨声同步淡出
+  setSessionState('paused');
+  setTimeout(() => {
+    if (!AUDIO.active && AUDIO.ctx) { AUDIO.ctx.suspend(); stopRainEl(); }
+    stopBars();
+  }, sec * 1000 + 150);
 }
 function setAudioState(txt) { const el = document.getElementById('audioState'); if (el) el.textContent = txt; }
 
@@ -931,7 +998,8 @@ function bindMixer() {
       fill.style.width = Math.round(ratio * 100) + '%';
       if (val) val.textContent = Math.round(ratio * 100) + '%';
       AUDIO.levels[key] = ratio;
-      if (AUDIO.gains[key]) AUDIO.gains[key].gain.setTargetAtTime(ratio, AUDIO.ctx.currentTime, .04);
+      if (key === 'rain') setRainVolume(ratio);          // 雨声走媒体元素音量
+      else if (AUDIO.ctx && AUDIO.gains[key]) AUDIO.gains[key].gain.setTargetAtTime(ratio, AUDIO.ctx.currentTime, .04);
     };
     const at = e => (e.touches && e.touches[0] ? e.touches[0].clientX : e.clientX);
     track.addEventListener('pointerdown', e => { dragging = true; apply(at(e)); });
@@ -1424,6 +1492,7 @@ function initJump() {
 /* ============ 启动 ============ */
 buildTabs();
 buildMixBars();
+initRainEl();
 bindMixer();
 buildHypno();
 initGoals();
