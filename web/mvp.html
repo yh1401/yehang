@@ -162,6 +162,23 @@
   .timer-pill { cursor: pointer; padding: 8px 14px; font-size: 12px; border: 1px solid transparent; }
   .timer-pill.on { background: rgba(243,201,142,.18); color: #f3c98e; border-color: rgba(243,201,142,.4); }
 
+  /* 锁屏诊断面板：只在 ?debug=1 时构建（见 initDebug），平时节点存在但 hidden */
+  #dbg { position: fixed; left: 0; right: 0; bottom: 0; z-index: 99; max-height: 46vh;
+    display: flex; flex-direction: column; background: rgba(8,11,20,.95);
+    border-top: 1px solid rgba(243,201,142,.3); font-family: ui-monospace, Menlo, monospace; }
+  #dbg[hidden] { display: none; }
+  #dbg .dbg-h { display: flex; align-items: center; gap: 8px; padding: 7px 10px; font-size: 11px; color: #f3c98e; }
+  #dbg .dbg-h b { font-weight: 650; flex: none; }
+  #dbg .dbg-h span { flex: 1; min-width: 0; color: #8f9ab8; font-size: 10px;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #dbg .dbg-h button { flex: none; font-size: 10px; padding: 3px 8px; border-radius: 7px;
+    border: 1px solid rgba(255,255,255,.18); background: transparent; color: #c3ccea; }
+  #dbg .dbg-log { overflow: auto; padding: 0 10px 10px; font-size: 10.5px; line-height: 1.55; color: #9aa5c2; }
+  #dbg .dbg-log div { border-top: 1px solid rgba(255,255,255,.05); padding: 3px 0; }
+  #dbg .dbg-log .ok { color: #8bd6a4; }
+  #dbg .dbg-log .bad { color: #ff9a9a; }
+  #dbg .dbg-log .warn { color: #f3c98e; }
+
   /* ============ 夜间记录 ============ */
   .night { background: #05070f; }
   .night-center { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 22px; }
@@ -751,6 +768,17 @@
 <audio id="pianoEl" preload="none"></audio>
 <audio id="pinkEl"  preload="none"></audio>
 <audio id="scapeEl" preload="none"></audio>
+
+<!-- 锁屏诊断面板：仅当 URL 带 ?debug=1 时由 initDebug() 取消 hidden，正常访问不显示 -->
+<div id="dbg" hidden>
+  <div class="dbg-h">
+    <b>锁屏诊断</b>
+    <span id="dbgLive">等待音源…</span>
+    <button id="dbgCopy" type="button">复制</button>
+    <button id="dbgClear" type="button">清空</button>
+  </div>
+  <div class="dbg-log" id="dbgLog"></div>
+</div>
 
 <script>
 /* ============ 屏幕与导航 ============ */
@@ -1571,6 +1599,132 @@ function initJump() {
   });
 }
 
+/* ============ 锁屏诊断（?debug=1）============
+   为什么不能靠"日志还在不在刷"判断：iOS 锁屏后整个 JS 上下文被系统挂起，
+   setInterval / setTimeout 全部停摆，日志必然静止——那是正常现象，不是故障。
+   唯一可靠的判据是把「锁屏前后真实时钟流逝的秒数」和「音频 currentTime 推进的秒数」对比：
+   currentTime 由媒体引擎维护，不受 JS 挂起影响，能如实反映锁屏期间音频到底走了多久。 */
+const DBG = { on: false, at: 0, ct: 0, dur: 0, loop: false, src: '' };
+
+function dbgEl() { return AUDIO.mode === 'scape' ? AUDIO.els.scape : AUDIO.els.rain; }
+
+function dbgLine(msg, cls) {
+  const box = document.getElementById('dbgLog');
+  if (!box) return;
+  while (box.childElementCount > 300) box.removeChild(box.firstChild);
+  const d = document.createElement('div');
+  if (cls) d.className = cls;
+  const t = new Date(), p = n => String(n).padStart(2, '0');
+  d.textContent = p(t.getHours()) + ':' + p(t.getMinutes()) + ':' + p(t.getSeconds()) + '  ' + msg;
+  box.appendChild(d);
+  box.scrollTop = box.scrollHeight;
+}
+function dbgEnv() {
+  let standalone = false;
+  try {
+    standalone = !!window.navigator.standalone
+      || !!(window.matchMedia && matchMedia('(display-mode: standalone)').matches);
+  } catch (e) {}
+  const m = navigator.userAgent.match(/OS (\d+[_.]\d+)/);
+  dbgLine('环境：' + (standalone ? 'PWA · 主屏图标' : 'Safari 标签页')
+    + ' · iOS ' + (m ? m[1].replace('_', '.') : '?')
+    + ' · mode=' + AUDIO.mode + ' · elVolOk=' + AUDIO.elVolOk, 'warn');
+}
+
+/* 进入后台/锁屏：记下此刻的音频位置 */
+function dbgHide() {
+  const el = dbgEl();
+  DBG.at = Date.now();
+  DBG.ct = el ? el.currentTime : 0;
+  DBG.dur = (el && isFinite(el.duration)) ? el.duration : 0;
+  DBG.loop = el ? !!el.loop : false;
+  DBG.src = el ? (el.getAttribute('src') || '') : '';
+  dbgLine('⬇ 离开前台（' + document.visibilityState + '）· 音频位置 ' + DBG.ct.toFixed(1) + 's'
+    + (DBG.loop ? ' · 循环文件' : ''), 'warn');
+}
+
+/* 回到前台：用「真实流逝」去校验「音频推进」 */
+function dbgShow() {
+  if (!DBG.at) return;
+  const el = dbgEl();
+  const wd = (Date.now() - DBG.at) / 1000;
+  DBG.at = 0;
+  if (!el) { dbgLine('⬆ 回到前台，但没有音频元素', 'bad'); return; }
+  if ((el.getAttribute('src') || '') !== DBG.src) { dbgLine('⬆ 回到前台，但音源已换，本次无法判定', 'warn'); return; }
+
+  const raw = DBG.ct + wd;
+  const exp = (DBG.loop && DBG.dur > 0) ? raw % DBG.dur : (DBG.dur > 0 ? Math.min(raw, DBG.dur) : raw);
+  let d = Math.abs(el.currentTime - exp);
+  if (DBG.loop && DBG.dur > 0) d = Math.min(d, DBG.dur - d);
+  const md = el.currentTime - DBG.ct;
+  const head = '⬆ 回到前台：真实 +' + wd.toFixed(1) + 's，音频 +' + md.toFixed(1) + 's → ';
+  /* 循环文件的固有歧义：真实时长正好是整数圈时，"一直在播"和"整段挂起"算出来一模一样 */
+  const cycles = (DBG.loop && DBG.dur > 0) ? Math.abs(wd / DBG.dur - Math.round(wd / DBG.dur)) : 1;
+  if (DBG.loop && DBG.dur > 0 && cycles * DBG.dur < 5 && Math.round(wd / DBG.dur) >= 1) {
+    dbgLine(head + '无法判定（锁屏时长正好是整 ' + Math.round(wd / DBG.dur) + ' 圈循环，两种结论数值相同）', 'warn');
+  } else if (el.error) {
+    dbgLine(head + '异常：媒体错误 code=' + el.error.code, 'bad');
+  } else if (el.paused && !el.ended) {
+    dbgLine(head + '异常：回到前台时音频处于暂停状态', 'bad');
+  } else if (d <= 3) {
+    dbgLine(head + (el.ended ? '正常：锁屏期间一直播到文件结尾，随后自动停止'
+      : '正常：锁屏期间音频持续推进'), 'ok');
+  } else if (Math.abs(md) < 3) {
+    dbgLine(head + '异常：整段被挂起，音频一步没走', 'bad');
+  } else {
+    dbgLine(head + '异常：中途停了，只走了 ' + md.toFixed(1) + 's', 'bad');
+  }
+}
+
+function dbgTick() {
+  const live = document.getElementById('dbgLive');
+  if (!live) return;
+  const el = dbgEl();
+  if (!el || !el.getAttribute('src')) { live.textContent = '无音源 · mode=' + AUDIO.mode; return; }
+  live.textContent = 'ct=' + el.currentTime.toFixed(1) + 's/'
+    + (isFinite(el.duration) ? el.duration.toFixed(0) : '?') + 's · '
+    + (el.paused ? '暂停' : '播放') + (el.ended ? '·已结束' : '')
+    + ' · rdy' + el.readyState + ' · ' + (el.loop ? 'loop' : 'once')
+    + ' · session=' + (('mediaSession' in navigator) ? navigator.mediaSession.playbackState : 'n/a');
+}
+
+function initDebug() {
+  if (new URLSearchParams(location.search).get('debug') !== '1') return;
+  const box = document.getElementById('dbg');
+  if (!box) return;
+  DBG.on = true;
+  box.hidden = false;
+
+  document.getElementById('dbgClear').onclick = () => {
+    document.getElementById('dbgLog').innerHTML = '';
+    dbgLine('（日志已清空）');
+  };
+  document.getElementById('dbgCopy').onclick = () => {
+    const txt = document.getElementById('dbgLog').innerText;
+    if (!navigator.clipboard) return dbgLine('复制不可用，请手动截图');
+    navigator.clipboard.writeText(txt)
+      .then(() => dbgLine('日志已复制到剪贴板'), () => dbgLine('复制失败，请手动截图'));
+  };
+
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') dbgHide(); else dbgShow();
+  });
+  window.addEventListener('pagehide', e => dbgLine('pagehide · persisted=' + e.persisted, 'warn'));
+  window.addEventListener('pageshow', e => dbgLine('pageshow · persisted=' + e.persisted, 'warn'));
+
+  [AUDIO.els.scape].concat(TRACKS.map(k => AUDIO.els[k])).filter(Boolean).forEach(el => {
+    ['play', 'pause', 'playing', 'ended', 'error', 'stalled', 'waiting', 'emptied'].forEach(t =>
+      el.addEventListener(t, () =>
+        dbgLine('[' + el.id + '] ' + t + (t === 'ended' ? ' @' + el.currentTime.toFixed(1) + 's' : ''))));
+  });
+
+  setInterval(dbgTick, 1000);
+  dbgLine('诊断已开启。用法：锁屏前先看这一行，锁屏一段时间后回来，看 ⬆ 那一行的结论。', 'warn');
+  dbgLine('注意：循环音（直到手动停止）请让锁屏时长小于 120 秒，结论才无歧义。', 'warn');
+  dbgEnv();
+  dbgTick();
+}
+
 /* ============ 启动 ============ */
 buildTabs();
 buildMixBars();
@@ -1581,6 +1735,7 @@ bindMixer();
 buildHypno();
 initGoals();
 initJump();
+initDebug();
 go('home');
 tickClock(23 * 60 + 41);
 
