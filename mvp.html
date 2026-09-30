@@ -454,18 +454,23 @@
           </div>
 
           <div class="card" style="width:100%;max-width:300px">
-            <div class="between"><span class="tiny">体动采集</span><span class="pill green">5 Hz</span></div>
+            <div class="between"><span class="tiny">体动采集</span><span class="pill green" id="motionState">启动中…</span></div>
+            <div class="divider" style="margin:12px 0"></div>
+            <div class="between"><span class="tiny">环境音量</span><span class="pill green" id="dbState">—</span></div>
             <div class="divider" style="margin:12px 0"></div>
             <div class="between"><span class="tiny">鼾声监听</span><span class="pill green" id="snoreState">待触发</span></div>
             <div class="divider" style="margin:12px 0"></div>
-            <div class="between"><span class="tiny">本次耗电</span><span class="pill grey" id="battery">1%</span></div>
+            <div class="between"><span class="tiny">本次耗电</span><span class="pill grey" id="battery">—</span></div>
             <div class="divider" style="margin:12px 0"></div>
             <div class="between"><span class="tiny">数据位置</span><span class="pill grey">仅本机</span></div>
           </div>
 
           <div class="notice" style="max-width:300px">原始录音不会上传，也不会整夜持续录音：只在检测到声音事件时录一小段，供你早上回放确认。</div>
 
-          <button class="btn ghost mt12" style="max-width:300px" onclick="wakeUp()">⏩ 演示：我醒了</button>
+          <div class="tiny mt12" id="monMode" style="max-width:300px;text-align:center;color:#8b95b5"></div>
+          <button class="btn ghost mt12" id="permBtn" style="max-width:300px;display:none" onclick="requestSensors()">允许使用话筒与传感器</button>
+
+          <button class="btn ghost mt12" style="max-width:300px" onclick="wakeUp()">⏩ 我醒了 · 看早报</button>
         </div>
       </section>
       <!-- ================= 4. 早报 ================= -->
@@ -747,6 +752,7 @@ function go(id) {
     haltClock();
     if (AUDIO.ctx && AUDIO.active) fadeOutAudio(1.2);
   }
+  if (cur === 'night' && id !== 'night') stopNightWatch();   // 离开夜间：释放话筒/传感器
   document.querySelectorAll('.screen').forEach(s => s.classList.toggle('active', s.id === 's-' + id));
   cur = id;
   if (id === 'report') { reportRead = true; buildTabs(); }
@@ -1009,28 +1015,207 @@ function resetAutostop() {
   haltClock();
 }
 
-/* ============ 夜间记录 ============ */
-let nightTimer = null;
-function startNightWatch() {
-  if (nightTimer) clearInterval(nightTimer);
-  let snore = 0, batt = 1, t = 0;
-  const sEl = document.getElementById('snoreState');
-  const bEl = document.getElementById('battery');
-  const dEl = document.getElementById('nightDesc');
-  const orb = document.getElementById('nightOrb');
-  nightTimer = setInterval(() => {
-    t++;
-    if (t === 3) { sEl.textContent = '已触发 1 次'; sEl.className = 'pill warm'; }
-    if (t === 6) { snore++; sEl.textContent = '已触发 ' + snore + ' 次 · 本机'; }
-    if (t % 2 === 0 && batt < 6) { batt++; bEl.textContent = batt + '%'; }
-    if (t === 4) { orb.textContent = '😴'; dEl.textContent = '已判定入睡 · 低频采集 · 屏幕已熄灭'; }
-    if (t === 9) { dEl.textContent = '凌晨 3 点左右体动略多，已记录一次浅睡段'; }
-  }, 900);
+/* ============ 夜间记录：真采集（话筒 + 体动），不支持时回落演示 ============ */
+/* 参考睡眠岛：麦克风算环境音量与低频能量→鼾声；5Hz 加速度计滑窗方差→体动能量。
+   触发式短录（仅事件时录 6 秒），本机 Blob，可回放。 */
+const MON = {
+  stream: null, ctx: null, an: null, td: null, fd: null,
+  motionHandler: null, lastMotion: 0, samples: [],
+  rec: null, chunks: [], clips: [], clip: null,
+  snore: 0, snoreAt: 0, audioDb: -100, lowE: 0, motionE: 0,
+  quietSince: 0, asleep: false, batt: null, mode: 'demo',
+  timers: [], motionPerm: null, micOk: false, motionOk: false
+};
+
+function stopNightWatch() {
+  MON.timers.forEach(clearInterval); MON.timers = [];
+  if (MON.rec && MON.rec.state !== 'inactive') { try { MON.rec.stop(); } catch (e) {} }
+  if (MON.stream) MON.stream.getTracks().forEach(t => t.stop());
+  if (MON.ctx && MON.ctx.state !== 'closed') { try { MON.ctx.close(); } catch (e) {} }
+  if (MON.motionHandler) window.removeEventListener('devicemotion', MON.motionHandler);
+  if (MON.clip) { try { MON.clip.pause(); } catch (e) {} MON.clip = null; }
+  MON.stream = MON.ctx = MON.an = MON.rec = null;
+  MON.motionHandler = null; MON.mode = 'demo';
 }
+
+async function startNightWatch() {
+  stopNightWatch();
+  MON.snore = 0; MON.clips = []; MON.samples = []; MON.audioDb = -100;
+  MON.motionE = 0; MON.asleep = false; MON.quietSince = Date.now();
+  setPill('motionState', '启动中…', 'green');
+  setPill('dbState', '—', 'green');
+  setPill('snoreState', '待触发', 'green');
+  MON.micOk = await startMic();
+  MON.motionOk = await startMotion();
+  MON.mode = (MON.micOk || MON.motionOk) ? 'real' : 'demo';
+  if (MON.mode === 'demo') runDemoNight();
+  MON.timers.push(setInterval(paintMonitor, 1000));
+  MON.timers.push(setInterval(sampleAudio, 250));
+  startBattery();
+  paintMonitor();
+}
+
 function wakeUp() {
-  if (nightTimer) { clearInterval(nightTimer); nightTimer = null; }
+  stopNightWatch();
   go('report');
   setTimeout(() => document.getElementById('hypno').scrollIntoView({ block: 'center' }), 120);
+}
+
+function setPill(id, text, cls) {
+  const el = document.getElementById(id); if (!el) return;
+  el.textContent = text; if (cls) el.className = 'pill ' + cls;
+}
+
+/* --- 话筒：音量 + 低频能量 → 鼾声 --- */
+async function startMic() {
+  try {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) return false;
+    const stream = await navigator.mediaDevices.getUserMedia({
+      audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: true }
+    });
+    const AC = window.AudioContext || window.webkitAudioContext;
+    const ctx = new AC();
+    if (ctx.state === 'suspended') await ctx.resume();
+    const an = ctx.createAnalyser();
+    an.fftSize = 1024; an.smoothingTimeConstant = .7;
+    ctx.createMediaStreamSource(stream).connect(an);   // 不连 destination，避免回声
+    MON.stream = stream; MON.ctx = ctx; MON.an = an;
+    MON.td = new Float32Array(an.fftSize);
+    MON.fd = new Uint8Array(an.frequencyBinCount);
+    try {
+      const t = MediaRecorder.isTypeSupported('audio/webm') ? 'audio/webm' : (MediaRecorder.isTypeSupported('audio/mp4') ? 'audio/mp4' : '');
+      MON.rec = new MediaRecorder(stream, t ? { mimeType: t } : undefined);
+      MON.rec.ondataavailable = e => { if (e.data && e.data.size) MON.chunks.push(e.data); };
+      MON.rec.onstop = () => {
+        if (MON.chunks.length) { MON.clips.push(URL.createObjectURL(new Blob(MON.chunks, { type: MON.chunks[0].type }))); }
+        MON.chunks = [];
+      };
+    } catch (e) { MON.rec = null; }
+    return true;
+  } catch (e) { return false; }
+}
+
+/* --- 加速度计：5Hz 滑窗方差 → 体动能量 --- */
+async function startMotion() {
+  try {
+    if (typeof DeviceMotionEvent === 'undefined') return false;
+    if (typeof DeviceMotionEvent.requestPermission === 'function') {
+      MON.motionPerm = MON.motionPerm || DeviceMotionEvent.requestPermission();
+      const res = await MON.motionPerm;
+      if (res !== 'granted') return false;
+    }
+    MON.motionHandler = e => {
+      const a = e.accelerationIncludingGravity || e.acceleration;
+      if (!a) return;
+      const now = performance.now();
+      if (now - MON.lastMotion < 200) return;        // 限到 ~5Hz，省电
+      MON.lastMotion = now;
+      const m = Math.hypot(a.x || 0, a.y || 0, a.z || 0);
+      MON.samples.push(m);
+      if (MON.samples.length > 30) MON.samples.shift();   // 6 秒窗
+      const avg = MON.samples.reduce((s, v) => s + v, 0) / MON.samples.length;
+      const vs = MON.samples.reduce((s, v) => s + (v - avg) * (v - avg), 0) / MON.samples.length;
+      MON.motionE = Math.min(1, Math.sqrt(vs) / 1.6);
+      if (MON.motionE > .28) MON.quietSince = Date.now();  // 有体动 → 重新计静默
+    };
+    window.addEventListener('devicemotion', MON.motionHandler);
+    return true;
+  } catch (e) { return false; }
+}
+
+/* --- 每 250ms 采样：环境 dB + 低频能量占比 --- */
+function sampleAudio() {
+  if (!MON.an || !MON.ctx || MON.ctx.state !== 'running') return;
+  MON.an.getFloatTimeDomainData(MON.td);
+  let sum = 0;
+  for (let i = 0; i < MON.td.length; i++) sum += MON.td[i] * MON.td[i];
+  const rms = Math.sqrt(sum / MON.td.length);
+  MON.audioDb = Math.max(-100, 20 * Math.log10(rms + 1e-8));
+  MON.an.getByteFrequencyData(MON.fd);
+  const binHz = MON.ctx.sampleRate / MON.an.fftSize;
+  const top = Math.max(1, Math.floor(250 / binHz));       // 鼾声/呼吸集中在 250Hz 以下
+  let band = 0, all = 0;
+  for (let i = 0; i < MON.fd.length; i++) { all += MON.fd[i]; if (i <= top) band += MON.fd[i]; }
+  MON.lowE = all > 0 ? band / all : 0;
+  if (MON.audioDb > -46) MON.quietSince = Date.now();      // 有声响 → 静默重新计时
+  const now = Date.now();
+  if (MON.audioDb > -42 && MON.lowE > .6 && now - MON.snoreAt > 12000) {
+    MON.snoreAt = now; MON.snore++; recordClip();          // 疑似鼾声：计数 + 触发式短录
+  }
+}
+
+/* --- 触发式短录：只在事件时录 6 秒，本机 Blob --- */
+function recordClip() {
+  if (!MON.rec || MON.rec.state !== 'inactive') return;
+  try {
+    MON.rec.start();
+    setTimeout(() => { try { MON.rec.stop(); } catch (e) {} }, 6000);
+  } catch (e) {}
+}
+
+/* --- 耗电（Battery API，拿不到就显示未知） --- */
+function startBattery() {
+  if (!navigator.getBattery) { setPill('battery', '未知', 'grey'); return; }
+  navigator.getBattery().then(b => {
+    MON.batt = b;
+    const upd = () => setPill('battery', Math.round((1 - b.level) * 100) + '%', 'grey');
+    b.addEventListener('levelchange', upd); upd();
+  }).catch(() => setPill('battery', '未知', 'grey'));
+}
+
+/* --- 读数渲染：真采集优先，缺失项明确标注，不假装有数据 --- */
+function paintMonitor() {
+  const orb = document.getElementById('nightOrb');
+  const desc = document.getElementById('nightDesc');
+  const modeEl = document.getElementById('monMode');
+  const permBtn = document.getElementById('permBtn');
+
+  if (MON.micOk) {
+    setPill('dbState', MON.audioDb <= -99 ? '安静' : MON.audioDb.toFixed(0) + ' dB', MON.audioDb > -46 ? 'warm' : 'green');
+  } else { setPill('dbState', '未授权', 'grey'); }
+
+  if (MON.motionOk && MON.samples.length) {          // 桌面无传感器：收不到样本就明确标注
+    setPill('motionState', '5 Hz · 体动 ' + Math.round(MON.motionE * 100) + '%', MON.motionE > .28 ? 'warm' : 'green');
+  } else { setPill('motionState', '无传感器', 'grey'); }
+
+  setPill('snoreState', MON.snore ? ('已触发 ' + MON.snore + ' 次 · 本机') : '待触发', MON.snore ? 'warm' : 'green');
+
+  if (MON.mode === 'real' && !MON.asleep && Date.now() - MON.quietSince > 8 * 60 * 1000) MON.asleep = true;
+  if (orb) orb.textContent = MON.asleep ? '😴' : '🌙';
+  if (desc) desc.textContent = MON.asleep
+    ? '已判定入睡 · 低频采集 · 屏幕可以熄灭了'
+    : '请把手机放在床垫上（枕头外侧），屏幕朝下';
+
+  if (modeEl) modeEl.textContent = MON.mode === 'real'
+    ? '真采集 · 话筒 ' + (MON.micOk ? '✓' : '✗') + ' · 体动 ' + (MON.motionOk ? '✓' : '✗') + '（PWA 仅前台有效，装到主屏更稳）'
+    : '当前为演示数据（未获得话筒 / 传感器权限）';
+
+  const canAskMotion = typeof DeviceMotionEvent !== 'undefined' && typeof DeviceMotionEvent.requestPermission === 'function';
+  if (permBtn) permBtn.style.display = (!MON.micOk || (canAskMotion && !MON.motionOk)) ? 'block' : 'none';
+}
+
+/* --- 演示回落：拿不到任何权限时，仍让流程可走通 --- */
+function runDemoNight() {
+  let t = 0;
+  MON.timers.push(setInterval(() => {
+    t++;
+    if (t === 3) MON.snore = 1;
+    if (t === 6) MON.snore = 2;
+    if (t === 4) MON.asleep = true;
+  }, 900));
+}
+
+/* --- 权限按钮：必须在用户手势内申请（iOS 运动权限要求） --- */
+async function requestSensors() {
+  try {
+    if (typeof DeviceMotionEvent !== 'undefined' && typeof DeviceMotionEvent.requestPermission === 'function') {
+      MON.motionPerm = DeviceMotionEvent.requestPermission().catch(() => 'denied');
+    }
+    if (!MON.micOk) MON.micOk = await startMic();
+    if (!MON.motionOk) MON.motionOk = await startMotion();
+    MON.mode = (MON.micOk || MON.motionOk) ? 'real' : 'demo';
+  } catch (e) {}
+  paintMonitor();
 }
 
 /* ============ 睡眠阶段图（体动法估计） ============ */
@@ -1064,12 +1249,20 @@ function closeSheet(e, id) {
   document.getElementById(id).classList.remove('show');
 }
 function playSnore(btn) {
-  if (btn.dataset.on === '1') {
-    btn.textContent = '■ 停止'; btn.dataset.on = '0';
-  } else {
-    btn.textContent = '🔊 播放中…'; btn.dataset.on = '1';
+  if (MON.clip) { try { MON.clip.pause(); } catch (e) {} MON.clip = null; }
+  if (btn.dataset.on === '1') {                                   // 再点一次 = 停止
+    btn.textContent = '▶ 播放'; btn.dataset.on = ''; return;
   }
-  setTimeout(() => { btn.textContent = '▶ 播放'; btn.dataset.on = ''; }, 2400);
+  if (!MON.clips.length) {                                        // 本晚没录到：不假装播放
+    btn.textContent = '暂无录音';
+    setTimeout(() => { btn.textContent = '▶ 播放'; }, 1600);
+    return;
+  }
+  const a = new Audio(MON.clips[0]);
+  MON.clip = a; btn.dataset.on = '1'; btn.textContent = '■ 停止';
+  const done = () => { btn.textContent = '▶ 播放'; btn.dataset.on = ''; MON.clip = null; };
+  a.onended = done;
+  a.play().catch(done);
 }
 
 /* ============ 开始今晚（MVP 无校准，直接进入助眠） ============ */
@@ -1081,6 +1274,10 @@ function resetPlayer() {
 }
 function startNight() {
   resetPlayer();
+  // iOS 的运动权限必须在用户手势内申请，这里先用点击预申请并缓存结果
+  if (typeof DeviceMotionEvent !== 'undefined' && typeof DeviceMotionEvent.requestPermission === 'function') {
+    MON.motionPerm = MON.motionPerm || DeviceMotionEvent.requestPermission().catch(() => 'denied');
+  }
   go('player');
 }
 
