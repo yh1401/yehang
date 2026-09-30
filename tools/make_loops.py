@@ -18,7 +18,7 @@ from pathlib import Path
 
 SR = 22050          # 采样率：音景能量都在 2kHz 以下，22.05k 足够且体积减半
 DUR = 60.0          # 循环长度（秒）
-OUT_DIR = Path(__file__).resolve().parent.parent / "audio"
+OUT_DIR = Path(__file__).resolve().parent.parent / "web" / "audio"
 SEED = 20260930     # 固定随机种子，保证可复现
 
 
