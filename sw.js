@@ -1,5 +1,5 @@
 /* 夜航 PWA Service Worker —— 缓存优先，离线也能打开 */
-const CACHE = 'yehang-v1';
+const CACHE = 'yehang-v2';
 const ASSETS = [
   './',
   './index.html',
